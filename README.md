@@ -6,47 +6,37 @@ Backgammon RL agents for CS final project. Environment code by Prof. Carl McTagu
 
 ```
 RL-Gammon/
-├── src/
-│   ├── agent_td0_linear.py      # Core implementation
-│   └── agent_td0_vectorized.py  # Training script
-├── docs/
-│   └── AGENT1_GUIDE.md          # Implementation guide
-├── backgammon_engine.py         # Game engine (professor)
-├── backgammon_value_net.py      # For Agent 2 (professor)
-├── backgammon_ppo_net.py        # For Agent 3 (professor)
-├── load_agent1.py               # Load trained agent
+├── agent1_td0.py              # Agent 1 implementation
+├── backgammon_engine.py       # Game engine (professor)
+├── backgammon_value_net.py    # For Agent 2 (professor)
+├── backgammon_ppo_net.py      # For Agent 3 (professor)
+├── jax_tutorial.py            # JAX examples
 └── requirements.txt
 ```
 
 ## Quick Start
 
 ```bash
-# Setup
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-
-# Train agent (2-10 hours)
-./venv/bin/python src/agent_td0_vectorized.py
-
-# Load trained agent
-python load_agent1.py
+python agent1_td0.py
+# Weights saved to agent1_weights.npy
 ```
 
-## Agent 1: TD(0) Linear ✅
+## Agent 1: TD(0) Linear
 
 **Implementation:**
-- 52 handcrafted features
+- 52 handcrafted features (blots, primes, pip count, etc.)
 - TD(0) learning with self-play
-- 2-ply minimax search
+- Epsilon-greedy exploration (0.3 → 0.01)
+- 2-ply search with batch evaluation
+- Canonical state representation
 - Linear value function: V(s) = w·f(s)
 
-**Files:**
-- `src/agent_td0_linear.py` - Features & value function
-- `src/agent_td0_vectorized.py` - Batch training
-- `load_agent1.py` - Load & use agent
+**File:** `agent1_td0.py` - Complete implementation (features, training, evaluation)
 
-**Training:** Runs 50k iterations with batch size 256. Saves to `agent1_weights.npy`.
+**Training:** 50k iterations, batch size 256, saves to `agent1_weights.npy`
 
 ## Agents 2 & 3
 

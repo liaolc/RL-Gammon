@@ -1,17 +1,18 @@
 import numpy as np
 import numba
 from numba import njit, prange
+from numba.typed import List
 from backgammon_engine import (
     _new_game, _roll_dice, _actions, _apply_move, _reward,
     _to_canonical, _2_ply_search, _vectorized_new_game,
     _vectorized_roll_dice, _vectorized_2_ply_search,
+    _vectorized_2_ply_search_epsilon_greedy, _vectorized_apply_move,
     W_BAR, B_BAR, W_OFF, B_OFF, NUM_POINTS, NUM_CHECKERS, HOME_BOARD_SIZE
 )
 
 # Agent 1: TD(0) with Linear Function Approximation
-# Uses handcrafted features and 2-ply search
+# Uses handcrafted features, 2-ply search, and epsilon-greedy exploration
 
-# Feature extraction functions
 @njit
 def count_blots(state, player):
     """Count number of blots (single exposed checkers) for player"""
@@ -213,7 +214,6 @@ def extract_features(state, player):
     Extract all handcrafted features from state.
     Returns feature vector of length 52.
     """
-    # Pre-allocate array (28 + 2 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 1 + 6 = 52 features)
     features = np.zeros(52, dtype=np.float32)
     idx = 0
     
@@ -318,10 +318,8 @@ def batch_value_function_numba(states, weights):
     values = np.empty(n, dtype=np.float32)
     
     for i in prange(n):
-        # Convert tuple back to array
         state = np.array(states[i], dtype=np.int8)
-        # Always evaluate from current player's perspective (player=1 in canonical form)
-        values[i] = value_function(state, 1, weights)
+        values[i] = np.dot(weights, extract_features(state, 1))
     
     return values
 
@@ -331,125 +329,171 @@ def create_batch_value_function(weights):
         return batch_value_function_numba(states, weights)
     return batch_eval
 
-# TD(0) Learning
-def td_update(state, next_state, reward, player, weights, alpha, gamma):
-    """
-    Perform TD(0) update.
+@njit(parallel=True)
+def batch_extract_features(states, players):
+    """Extract features for a batch of states"""
+    n = len(states)
+    num_features = 52
+    features_batch = np.empty((n, num_features), dtype=np.float32)
     
-    δ = R + γ·V(S') - V(S)
-    w ← w + α·δ·f(S)
-    """
-    features = extract_features(state, player)
-    v_current = np.dot(weights, features)
+    for i in prange(n):
+        canonical_state = _to_canonical(states[i], players[i])
+        features_batch[i] = extract_features(canonical_state, 1)
     
-    if reward != 0:
-        # Terminal state
-        v_next = 0.0
-    else:
-        v_next = value_function(next_state, player, weights)
-    
-    td_error = reward + gamma * v_next - v_current
-    weights += alpha * td_error * features
-    
-    return weights, td_error
+    return features_batch
 
-# Single game training
-def play_single_game(weights, alpha=0.01, gamma=1.0, verbose=False):
-    """Play one game of self-play with TD(0) learning"""
+@njit(parallel=True)
+def batch_value_estimates(states, players, weights):
+    """Compute value estimates for a batch of states"""
+    n = len(states)
+    values = np.empty(n, dtype=np.float32)
     
-    player, dice, state = _new_game()
-    game_history = []
+    for i in prange(n):
+        canonical_state = _to_canonical(states[i], players[i])
+        features = extract_features(canonical_state, 1)
+        values[i] = np.dot(weights, features)
     
-    while True:
-        # Convert to canonical form (current player's perspective)
-        canonical_state = _to_canonical(state, player)
-        
-        # Select move using 2-ply search
-        batch_value_fn = create_batch_value_function(weights)
-        move = _2_ply_search(state, player, dice, batch_value_fn)
-        
-        # Apply move
-        new_state = _apply_move(state, player, move)
-        reward = _reward(new_state, player)
-        
-        # Store experience
-        game_history.append((canonical_state, player, reward))
-        
-        # Check if game over
-        if reward != 0:
-            # Backpropagate final reward through game history
-            for i in range(len(game_history) - 1, -1, -1):
-                hist_state, hist_player, _ = game_history[i]
-                
-                # Reward from this player's perspective
-                player_reward = reward * hist_player
-                
-                if i == len(game_history) - 1:
-                    # Terminal state
-                    features = extract_features(hist_state, 1)  # Canonical form
-                    v_current = np.dot(weights, features)
-                    td_error = player_reward - v_current
-                    weights += alpha * td_error * features
-                else:
-                    # Non-terminal: use next state
-                    next_hist_state, _, _ = game_history[i + 1]
-                    features = extract_features(hist_state, 1)
-                    v_current = np.dot(weights, features)
-                    v_next = value_function(next_hist_state, 1, weights)
-                    td_error = gamma * v_next - v_current
-                    weights += alpha * td_error * features
-            
-            if verbose:
-                winner = "White" if reward > 0 else "Black"
-                print(f"Game over! Winner: {winner}, Reward: {reward}")
-            
-            return weights, reward
-        
-        # Continue game
-        state = new_state
-        player = -player
-        dice = _roll_dice()
+    return values
 
-# Training loop
-def train_agent(num_games=10000, alpha=0.01, gamma=1.0, verbose_every=1000):
-    """Train Agent 1 using TD(0) with self-play"""
+def train_vectorized(batch_size=256, num_iterations=1000, alpha=0.01, gamma=1.0, 
+                     epsilon_start=0.3, epsilon_end=0.01, epsilon_decay_steps=None,
+                     verbose_every=10):
+    """
+    Train Agent 1 using vectorized self-play with epsilon-greedy exploration.
+    
+    Args:
+        batch_size: Number of games to play in parallel
+        num_iterations: Number of training iterations
+        alpha: Learning rate
+        gamma: Discount factor
+        epsilon_start: Initial exploration rate (default 0.3)
+        epsilon_end: Final exploration rate (default 0.01)
+        epsilon_decay_steps: Steps to decay epsilon (default: 80% of num_iterations)
+        verbose_every: Print progress every N iterations
+    """
     
     # Initialize weights
-    num_features = len(extract_features(np.zeros(28, dtype=np.int8), 1))
+    num_features = 52
     weights = np.random.randn(num_features).astype(np.float32) * 0.01
     
-    print(f"Training Agent 1 (TD(0) Linear)")
-    print(f"Number of features: {num_features}")
-    print(f"Number of games: {num_games}")
-    print(f"Learning rate: {alpha}, Gamma: {gamma}")
-    print("-" * 50)
+    # Set epsilon decay schedule
+    if epsilon_decay_steps is None:
+        epsilon_decay_steps = int(0.8 * num_iterations)
     
-    wins = 0
-    losses = 0
+    print(f"Training Agent 1 (TD(0) Linear) - Vectorized with Epsilon-Greedy")
+    print(f"Batch size: {batch_size}")
+    print(f"Number of iterations: {num_iterations}")
+    print(f"Features: {num_features}, Alpha: {alpha}, Gamma: {gamma}")
+    print(f"Epsilon: {epsilon_start:.3f} → {epsilon_end:.3f} over {epsilon_decay_steps} steps")
+    print("-" * 60)
     
-    for game_num in range(num_games):
-        weights, reward = play_single_game(weights, alpha, gamma, verbose=False)
-        
-        if reward > 0:
-            wins += 1
+    # Initialize games
+    states, players, dices = _vectorized_new_game(batch_size)
+    
+    total_games = 0
+    white_wins = 0
+    black_wins = 0
+    
+    for iteration in range(num_iterations):
+        # Compute current epsilon (linear decay)
+        if iteration < epsilon_decay_steps:
+            epsilon = epsilon_start - (epsilon_start - epsilon_end) * (iteration / epsilon_decay_steps)
         else:
-            losses += 1
+            epsilon = epsilon_end
         
-        if (game_num + 1) % verbose_every == 0:
-            win_rate = wins / (wins + losses) * 100
-            print(f"Game {game_num + 1}/{num_games} | Win Rate: {win_rate:.1f}% | Wins: {wins}, Losses: {losses}")
-            wins = 0
-            losses = 0
+        # Store current states for TD update
+        prev_states = states.copy()
+        prev_players = players.copy()
+        
+        # Select moves using epsilon-greedy 2-ply search
+        batch_value_fn = create_batch_value_function(weights)
+        moves = _vectorized_2_ply_search_epsilon_greedy(states, players, dices, batch_value_fn, epsilon)
+        
+        # Apply moves
+        new_states = _vectorized_apply_move(states, players, moves)
+        
+        # Compute rewards
+        rewards = np.zeros(batch_size, dtype=np.float32)
+        game_over = np.zeros(batch_size, dtype=np.bool_)
+        
+        for i in range(batch_size):
+            reward = _reward(new_states[i], players[i])
+            rewards[i] = reward
+            if reward != 0:
+                game_over[i] = True
+                total_games += 1
+                # Track wins from white's perspective (reward > 0 means white won)
+                if reward > 0:
+                    white_wins += 1
+                else:
+                    black_wins += 1
+        
+        # TD(0) update for all games
+        prev_features = batch_extract_features(prev_states, prev_players)
+        prev_values = np.dot(prev_features, weights)
+        
+        # Compute next values (0 for terminal states)
+        next_values = np.zeros(batch_size, dtype=np.float32)
+        for i in range(batch_size):
+            if not game_over[i]:
+                canonical_next = _to_canonical(new_states[i], players[i])
+                next_features = extract_features(canonical_next, 1)
+                next_values[i] = np.dot(weights, next_features)
+        
+        # TD errors (from each player's perspective)
+        td_errors = rewards + gamma * next_values - prev_values
+        
+        # Batch gradient update
+        gradient = np.zeros(num_features, dtype=np.float32)
+        for i in range(batch_size):
+            gradient += td_errors[i] * prev_features[i]
+        
+        weights += alpha * gradient / batch_size
+        
+        # Reset finished games
+        for i in range(batch_size):
+            if game_over[i]:
+                new_state, new_player, new_dice = _vectorized_new_game(1)
+                states[i] = new_state[0]
+                players[i] = new_player[0]
+                dices[i] = new_dice[0]
+        
+        # Update states and switch players for continuing games
+        states = new_states
+        players = -players
+        dices = _vectorized_roll_dice(batch_size)
+        
+        # Progress report
+        if (iteration + 1) % verbose_every == 0:
+            if total_games > 0:
+                white_win_rate = white_wins / total_games * 100
+                print(f"Iter {iteration + 1}/{num_iterations} | ε={epsilon:.3f} | Games: {total_games} | "
+                      f"White: {white_win_rate:.1f}% ({white_wins}W-{black_wins}L)")
+                white_wins = 0
+                black_wins = 0
+                total_games = 0
+            else:
+                print(f"Iter {iteration + 1}/{num_iterations} | ε={epsilon:.3f} | No games finished yet")
     
-    print("-" * 50)
+    print("-" * 60)
     print("Training complete!")
     
     return weights
 
 if __name__ == "__main__":
-    # Train the agent
-    weights = train_agent(num_games=1000, alpha=0.01, gamma=1.0, verbose_every=100)
+    # Full training configuration with epsilon-greedy exploration
+    weights = train_vectorized(
+        batch_size=256,
+        num_iterations=50000,
+        alpha=0.001,
+        gamma=1.0,
+        epsilon_start=0.3,
+        epsilon_end=0.01,
+        epsilon_decay_steps=40000,
+        verbose_every=500
+    )
     
-    # Save weights
+    # Save final weights
     np.save("agent1_weights.npy", weights)
-    print("Weights saved to agent1_weights.npy")
+    print("\nWeights saved to agent1_weights.npy")
+    print(f"Weight statistics: mean={weights.mean():.4f}, std={weights.std():.4f}")
