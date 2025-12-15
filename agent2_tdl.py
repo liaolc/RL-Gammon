@@ -145,8 +145,7 @@ def loss_fn(params, model, planes, aux, targets):
     
     return loss
 
-@jax.jit
-def td_lambda_update(params, opt_state, optimizer, traces, grads, td_errors):
+def td_lambda_update(params, opt_state, optimizer, traces, grads, td_errors, lambda_param, gamma):
     """
     Classical TD(lambda) update.
     
@@ -155,7 +154,7 @@ def td_lambda_update(params, opt_state, optimizer, traces, grads, td_errors):
     """
     # Update traces: z_t = γλ z_{t-1} + g_t
     new_traces = tree_map(
-        lambda z, g: GAMMA * LAMBDA * z + g,
+        lambda z, g: gamma * lambda_param * z + g,
         traces,
         grads
     )
@@ -244,8 +243,8 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
         next_values = np.zeros(batch_size, dtype=np.float32)
         for i in range(batch_size):
             if not game_over[i]:
-                canonical_next = _to_canonical(new_states[i], players[i])
-                next_planes, next_aux = encode_state(canonical_next, 1)
+                # encode_state already does canonicalization internally
+                next_planes, next_aux = encode_state(new_states[i], players[i])
                 next_planes_jax = jnp.array(next_planes[np.newaxis, :, :])
                 next_aux_jax = jnp.array(next_aux[np.newaxis, :])
                 next_value = model.apply({'params': params}, next_planes_jax, next_aux_jax)
@@ -269,7 +268,7 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
         
         # Perform Classical TD(lambda) update
         params, opt_state, traces = td_lambda_update(
-            params, opt_state, optimizer, traces, grads, avg_td_error
+            params, opt_state, optimizer, traces, grads, avg_td_error, lambda_param, GAMMA
         )
         
         # Reset traces for finished games
@@ -279,18 +278,18 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
         
         loss = float(loss)
         
-        # Reset finished games
+        # Update states and switch players for continuing games
+        states = new_states
+        players = -players
+        dices = _vectorized_roll_dice(batch_size)
+        
+        # Reset finished games (after updating, so they don't get overwritten)
         for i in range(batch_size):
             if game_over[i]:
                 new_state, new_player, new_dice = _vectorized_new_game(1)
                 states[i] = new_state[0]
                 players[i] = new_player[0]
                 dices[i] = new_dice[0]
-        
-        # Update states and switch players
-        states = new_states
-        players = -players
-        dices = _vectorized_roll_dice(batch_size)
         
         # Progress report
         if (iteration + 1) % verbose_every == 0:

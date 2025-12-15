@@ -146,7 +146,8 @@ def checkers_within_6_pips_of_blots(state, player):
     count = 0
     
     # Find opponent blots
-    opponent_blots = []
+    from numba import types
+    opponent_blots = List.empty_list(types.int64)
     for i in range(1, NUM_POINTS + 1):
         if state[i] * player == -1:
             opponent_blots.append(i)
@@ -450,18 +451,18 @@ def train_vectorized(batch_size=256, num_iterations=1000, alpha=0.01, gamma=1.0,
         
         weights += alpha * gradient / batch_size
         
-        # Reset finished games
+        # Update states and switch players for continuing games
+        states = new_states
+        players = -players
+        dices = _vectorized_roll_dice(batch_size)
+        
+        # Reset finished games (after updating, so they don't get overwritten)
         for i in range(batch_size):
             if game_over[i]:
                 new_state, new_player, new_dice = _vectorized_new_game(1)
                 states[i] = new_state[0]
                 players[i] = new_player[0]
                 dices[i] = new_dice[0]
-        
-        # Update states and switch players for continuing games
-        states = new_states
-        players = -players
-        dices = _vectorized_roll_dice(batch_size)
         
         # Progress report
         if (iteration + 1) % verbose_every == 0:
