@@ -199,23 +199,23 @@ def _reward(state, player):
             # backgammoned and loses three points
             if state[B_BAR] < 0:
                 return 3*player
-            for p in range(1,HOME_BOARD_SIZE+1):
+            for p in range(3*HOME_BOARD_SIZE+1,NUM_POINTS+1):
                 if state[p] < 0:
                     return 3*player
             return 2*player
-    if state[B_OFF] == NUM_CHECKERS:
+    if state[B_OFF] == -NUM_CHECKERS:
         # black has won
         if state[W_OFF] > 0:
             return -player
         else:
             if state[W_BAR] > 0:
                 return -3*player
-            for p in range(3*HOME_BOARD_SIZE+1,NUM_POINTS+1):
+            for p in range(1,HOME_BOARD_SIZE+1):
                 if state[p] > 0:
                     return -3*player
             return -2*player
     return 0
-        
+
 @njit
 def _act(state, player, move):
     new_state = _apply_move(state, player, move)
