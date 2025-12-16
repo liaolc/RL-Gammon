@@ -265,10 +265,10 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
 
 if __name__ == "__main__":
     params = train_agent2(
-        batch_size=256,
-        num_iterations=50000,
+        batch_size=64,
+        num_iterations=150,
         learning_rate=1e-4,
         lambda_param=0.7,
-        verbose_every=100,
-        checkpoint_every=5000
+        verbose_every=1,
+        checkpoint_every=30
     )
