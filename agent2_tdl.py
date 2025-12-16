@@ -14,9 +14,6 @@ from backgammon_value_net import BackgammonValueNet, BOARD_LENGTH, CONV_INPUT_CH
 import orbax.checkpoint as ocp
 import pathlib
 
-# Agent 2: TD(lambda) with Neural Network
-# Uses 1D ConvNet + ResNets, eligibility traces, and 2-ply search
-
 LEARNING_RATE = 1e-4
 LAMBDA = 0.7
 GAMMA = 1.0
@@ -25,47 +22,31 @@ NUM_ITERATIONS = 50000
 CHECKPOINT_DIR = './checkpoints/agent2'
 
 def encode_state(state, player):
-    """
-    Encode a single state into 15 feature planes (24, 15) + 6 aux features.
-    
-    Feature planes (15 total):
-    - Plane 0: Empty (shared, binary)
-    - Planes 1-7: My checkers (blot, made, builder, basic anchor, deep anchor, permanent anchor, overflow)
-    - Planes 8-14: Opponent checkers (same pattern)
-    
-    Auxiliary features (6 total):
-    - My bar active, my bar scale, my borne-off
-    - Opp bar active, opp bar scale, opp borne-off
-    """
+    """Encode state into 15 feature planes (24, 15) + 6 aux features."""
     canonical_state = _to_canonical(state, player)
-    
     planes = np.zeros((BOARD_LENGTH, CONV_INPUT_CHANNELS), dtype=np.float32)
     
+    # Encode each point: plane 0 = empty, planes 1-7 = my checkers, planes 8-14 = opponent
     for point in range(1, NUM_POINTS + 1):
         my_count = max(0, canonical_state[point])
         opp_count = max(0, -canonical_state[point])
         
-        # Plane 0: Empty (shared)
         if canonical_state[point] == 0:
             planes[point - 1, 0] = 1.0
-        
-        # My checkers (planes 1-7)
         if my_count == 1:
-            planes[point - 1, 1] = 1.0  # Blot
+            planes[point - 1, 1] = 1.0
         elif my_count == 2:
-            planes[point - 1, 2] = 1.0  # Made
+            planes[point - 1, 2] = 1.0
         elif my_count == 3:
-            planes[point - 1, 3] = 1.0  # Builder
+            planes[point - 1, 3] = 1.0
         elif my_count == 4:
-            planes[point - 1, 4] = 1.0  # Basic Anchor
+            planes[point - 1, 4] = 1.0
         elif my_count == 5:
-            planes[point - 1, 5] = 1.0  # Deep Anchor
+            planes[point - 1, 5] = 1.0
         elif my_count == 6:
-            planes[point - 1, 6] = 1.0  # Permanent Anchor
+            planes[point - 1, 6] = 1.0
         elif my_count > 6:
-            planes[point - 1, 7] = (my_count - 6) / 9.0  # Overflow (max 9)
-        
-        # Opponent checkers (planes 8-14)
+            planes[point - 1, 7] = (my_count - 6) / 9.0
         if opp_count == 1:
             planes[point - 1, 8] = 1.0
         elif opp_count == 2:
@@ -81,7 +62,6 @@ def encode_state(state, player):
         elif opp_count > 6:
             planes[point - 1, 14] = (opp_count - 6) / 9.0
     
-    # Auxiliary features
     aux = np.array([
         1.0 if canonical_state[W_BAR] > 0 else 0.0,
         canonical_state[W_BAR] / 15.0,
@@ -105,14 +85,8 @@ def batch_encode_states(states, players):
     return jnp.array(planes_batch), jnp.array(aux_batch)
 
 def create_batch_value_function(model, params):
-    """
-    Create a batch value function for 2-ply search.
-    
-    The 2-ply search expects a function that takes a list of states
-    and returns their values from the current player's perspective.
-    """
+    """Create batch value function for 2-ply search."""
     def batch_value_fn(states):
-        # Convert states to feature representation
         batch_size = len(states)
         planes = np.zeros((batch_size, BOARD_LENGTH, CONV_INPUT_CHANNELS), dtype=np.float32)
         aux = np.zeros((batch_size, AUX_INPUT_SIZE), dtype=np.float32)
@@ -121,37 +95,42 @@ def create_batch_value_function(model, params):
             state = np.array(states[i], dtype=np.int8)
             planes[i], aux[i] = encode_state(state, 1)
         
-        # Evaluate with neural network
         planes_jax = jnp.array(planes)
         aux_jax = jnp.array(aux)
         values = model.apply({'params': params}, planes_jax, aux_jax)
-        
-        # Scale from [-1, 1] to [-3, 3]
         values = values * 3.0
         
         return np.array(values.flatten(), dtype=np.float32)
     
     return batch_value_fn
 
-def loss_fn(params, model, planes, aux, targets):
-    """
-    Compute MSE loss between predicted values and TD targets.
-    """
-    predictions = model.apply({'params': params}, planes, aux)
-    predictions = predictions * 3.0  # Scale to [-3, 3]
+def compute_value_gradients(params, model, planes, aux):
+    """Compute per-sample ∇V̂(S_t, w_t) for Classical TD(λ)."""
+    def single_value_fn(p, plane, aux_single):
+        pred = model.apply({'params': p}, plane[None, ...], aux_single[None, ...])
+        return (pred * 3.0)[0, 0]
     
+    # Compute gradient for each game in the batch
+    batched_grad = jax.vmap(
+        lambda pl, au: jax.grad(lambda p: single_value_fn(p, pl, au))(params),
+        in_axes=(0, 0)
+    )
+    grads = batched_grad(planes, aux)
+    return grads
+
+def loss_fn(params, model, planes, aux, targets):
+    """Compute MSE loss for monitoring."""
+    predictions = model.apply({'params': params}, planes, aux)
+    predictions = predictions * 3.0
     td_errors = targets - predictions.flatten()
     loss = jnp.mean(jnp.square(td_errors))
     
     return loss
 
 def td_lambda_update(params, opt_state, optimizer, traces, grads, td_errors, lambda_param, gamma):
-    """
-    Classical TD(lambda) update.
+    """Classical TD(λ) update with per-game traces."""
+    batch_size = td_errors.shape[0]
     
-    z_t = γλ z_{t-1} + g_t
-    w_{t+1} = w_t + α·δ_t·z_t
-    """
     # Update traces: z_t = γλ z_{t-1} + g_t
     new_traces = tree_map(
         lambda z, g: gamma * lambda_param * z + g,
@@ -159,11 +138,13 @@ def td_lambda_update(params, opt_state, optimizer, traces, grads, td_errors, lam
         grads
     )
     
-    # Scale traces by TD error for weight update
-    scaled_traces = tree_map(lambda z: td_errors * z, new_traces)
+    # Weight update: w_{t+1} = w_t + α Σ_i δ_t^(i) z_t^(i)
+    def scale_and_sum(z):
+        td_errors_reshaped = td_errors.reshape((batch_size,) + (1,) * (z.ndim - 1))
+        return jnp.sum(td_errors_reshaped * z, axis=0)
     
-    # Apply optimizer update using scaled traces
-    updates, new_opt_state = optimizer.update(scaled_traces, opt_state, params)
+    summed_updates = tree_map(scale_and_sum, new_traces)
+    updates, new_opt_state = optimizer.update(summed_updates, opt_state, params)
     new_params = optax.apply_updates(params, updates)
     
     return new_params, new_opt_state, new_traces
@@ -171,63 +152,43 @@ def td_lambda_update(params, opt_state, optimizer, traces, grads, td_errors, lam
 def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS, 
                  learning_rate=LEARNING_RATE, lambda_param=LAMBDA,
                  verbose_every=100, checkpoint_every=5000):
-    """
-    Train Agent 2 using TD(lambda) with neural network and eligibility traces.
-    """
-    print(f"Training Agent 2 (TD(λ) Neural Network)")
-    print(f"Batch size: {batch_size}")
-    print(f"Iterations: {num_iterations}")
-    print(f"Learning rate: {learning_rate}, λ: {lambda_param}, γ: {GAMMA}")
-    print("-" * 60)
+    """Train Agent 2 using TD(λ) with neural network."""
+    print(f"Training Agent 2: batch={batch_size}, iters={num_iterations}, lr={learning_rate}, λ={lambda_param}")
     
-    # Initialize model
+    # Initialize model and optimizer
     model = BackgammonValueNet()
     rng_key = jax.random.key(0)
-    
     dummy_planes = jnp.zeros((1, BOARD_LENGTH, CONV_INPUT_CHANNELS))
     dummy_aux = jnp.zeros((1, AUX_INPUT_SIZE))
+    params = model.init(rng_key, dummy_planes, dummy_aux)['params']
     
-    init_variables = model.init(rng_key, dummy_planes, dummy_aux)
-    params = init_variables['params']
-    
-    # Initialize optimizer
     optimizer = optax.adam(learning_rate=learning_rate)
     opt_state = optimizer.init(params)
     
-    # Initialize eligibility traces (same structure as params, all zeros)
-    traces = tree_map(lambda p: jnp.zeros_like(p), params)
+    # Initialize per-game eligibility traces
+    traces = tree_map(lambda p: jnp.zeros((batch_size,) + p.shape, dtype=p.dtype), params)
     
-    # Initialize games
     states, players, dices = _vectorized_new_game(batch_size)
+    total_games = white_wins = black_wins = 0
     
-    total_games = 0
-    white_wins = 0
-    black_wins = 0
-    
-    # Setup checkpointing
     checkpoint_path = pathlib.Path(CHECKPOINT_DIR)
     checkpoint_path.mkdir(parents=True, exist_ok=True)
     checkpointer = ocp.StandardCheckpointer()
     
     for iteration in range(num_iterations):
-        # Store current states for TD update
+        # Store current states and encode
         prev_states = states.copy()
         prev_players = players.copy()
-        
-        # Encode previous states
         prev_planes, prev_aux = batch_encode_states(prev_states, prev_players)
         
-        # Select moves using 2-ply search
+        # Select moves using 2-ply search and apply
         batch_value_fn = create_batch_value_function(model, params)
         moves = _vectorized_2_ply_search(states, players, dices, batch_value_fn)
-        
-        # Apply moves
         new_states = _vectorized_apply_move(states, players, moves)
         
-        # Compute rewards
+        # Compute rewards and track game endings
         rewards = np.zeros(batch_size, dtype=np.float32)
         game_over = np.zeros(batch_size, dtype=bool)
-        
         for i in range(batch_size):
             reward = _reward(new_states[i], players[i])
             rewards[i] = reward
@@ -239,51 +200,43 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
                 else:
                     black_wins += 1
         
-        # Compute next state values (0 for terminal states)
-        next_values = np.zeros(batch_size, dtype=np.float32)
-        for i in range(batch_size):
-            if not game_over[i]:
-                # encode_state already does canonicalization internally
-                next_planes, next_aux = encode_state(new_states[i], players[i])
-                next_planes_jax = jnp.array(next_planes[np.newaxis, :, :])
-                next_aux_jax = jnp.array(next_aux[np.newaxis, :])
-                next_value = model.apply({'params': params}, next_planes_jax, next_aux_jax)
-                next_values[i] = float(next_value[0, 0]) * 3.0
+        # Compute next state values in one batched forward pass (0 for terminal states)
+        next_planes, next_aux = batch_encode_states(new_states, players)
+        next_pred = model.apply({'params': params}, next_planes, next_aux)
+        next_values = (next_pred * 3.0).flatten()
+        next_values = np.array(next_values, dtype=np.float32)
+        next_values[game_over] = 0.0
         
-        # Compute current state values
         prev_values_pred = model.apply({'params': params}, prev_planes, prev_aux)
         prev_values_pred = (prev_values_pred * 3.0).flatten()
         prev_values_pred = np.array(prev_values_pred, dtype=np.float32)
         
-        # Compute TD errors: δ = r + γ·V(s') - V(s)
+        # TD(λ) update: compute TD errors, gradients, and update params
         td_errors = rewards + GAMMA * next_values - prev_values_pred
-        
-        # Average TD error across batch
-        avg_td_error = float(np.mean(td_errors))
-        
-        # Compute gradients
-        td_targets = rewards + GAMMA * next_values
-        td_targets_jax = jnp.array(td_targets)
-        loss, grads = jax.value_and_grad(loss_fn)(params, model, prev_planes, prev_aux, td_targets_jax)
-        
-        # Perform Classical TD(lambda) update
+        td_errors_jax = jnp.array(td_errors)
+        grads = compute_value_gradients(params, model, prev_planes, prev_aux)
         params, opt_state, traces = td_lambda_update(
-            params, opt_state, optimizer, traces, grads, avg_td_error, lambda_param, GAMMA
+            params, opt_state, optimizer, traces, grads, td_errors_jax, lambda_param, GAMMA
         )
         
         # Reset traces for finished games
         if np.any(game_over):
-            decay_factor = 1.0 - (np.sum(game_over) / batch_size)
-            traces = tree_map(lambda z: z * decay_factor, traces)
+            game_over_jax = jnp.array(game_over)
+            def reset_finished_traces(z):
+                mask = (1.0 - game_over_jax).reshape((batch_size,) + (1,) * (z.ndim - 1))
+                return z * mask
+            traces = tree_map(reset_finished_traces, traces)
         
-        loss = float(loss)
+        td_targets = rewards + GAMMA * next_values
+        td_targets_jax = jnp.array(td_targets)
+        loss = float(loss_fn(params, model, prev_planes, prev_aux, td_targets_jax))
         
-        # Update states and switch players for continuing games
+        # Update states and switch players
         states = new_states
         players = -players
         dices = _vectorized_roll_dice(batch_size)
         
-        # Reset finished games (after updating, so they don't get overwritten)
+        # Reset finished games
         for i in range(batch_size):
             if game_over[i]:
                 new_state, new_player, new_dice = _vectorized_new_game(1)
@@ -291,37 +244,21 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
                 players[i] = new_player[0]
                 dices[i] = new_dice[0]
         
-        # Progress report
+        # Progress reporting
         if (iteration + 1) % verbose_every == 0:
             if total_games > 0:
                 white_win_rate = white_wins / total_games * 100
-                print(f"Iter {iteration + 1}/{num_iterations} | Loss: {loss:.6f} | "
-                      f"Games: {total_games} | White: {white_win_rate:.1f}% "
-                      f"({white_wins}W-{black_wins}L)")
-                white_wins = 0
-                black_wins = 0
-                total_games = 0
+                print(f"[{iteration + 1}/{num_iterations}] Loss: {loss:.6f} | Games: {total_games} | White: {white_win_rate:.1f}% ({white_wins}W-{black_wins}L)")
+                white_wins = black_wins = total_games = 0
             else:
-                print(f"Iter {iteration + 1}/{num_iterations} | Loss: {loss:.6f} | "
-                      f"No games finished yet")
+                print(f"[{iteration + 1}/{num_iterations}] Loss: {loss:.6f}")
         
-        # Save checkpoint
         if (iteration + 1) % checkpoint_every == 0:
-            checkpoint_name = f"checkpoint_{iteration + 1}"
-            checkpointer.save(
-                checkpoint_path / checkpoint_name,
-                params,
-                force=True
-            )
-            print(f"Saved checkpoint: {checkpoint_name}")
+            checkpointer.save(checkpoint_path / f"checkpoint_{iteration + 1}", params, force=True)
+            print(f"Checkpoint saved: {iteration + 1}")
     
-    print("-" * 60)
-    print("Training complete!")
-    
-    # Save final checkpoint
     checkpointer.save(checkpoint_path / "final", params, force=True)
-    print(f"Final checkpoint saved to {checkpoint_path / 'final'}")
-    
+    print("Training complete")
     checkpointer.close()
     
     return params
