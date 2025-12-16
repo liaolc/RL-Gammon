@@ -38,6 +38,13 @@ python agent1_td0.py
 
 **Training:** 50k iterations, batch size 256, saves to `agent1_weights.npy`
 
-## Agents 2 & 3
+## Agents 2 
+
+### Quick Start:
+- Set up anaconda virtual environment (or similar), e.g. running 
+`conda env create -f environment.yml` 
+- Edit the SLURM script `run_gammon.sl` to reflect your file organization, environment path, etc.
+- Hyperparameters like Batch Size, Num. Iterations, can be edited in the `__main__` part at the bottom of agents2_tdl.py (run flags to be implemented)
+## Agent 3
 
 Not yet implemented.
