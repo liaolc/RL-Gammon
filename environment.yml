@@ -1,0 +1,12 @@
+name: rl-gammon
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - numpy
+  - numba
+  - pip
+  - pip:
+    - jax[cuda12]
+    - flax

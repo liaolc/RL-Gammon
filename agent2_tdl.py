@@ -17,7 +17,7 @@ import pathlib
 LEARNING_RATE = 1e-4
 LAMBDA = 0.7
 GAMMA = 1.0
-BATCH_SIZE = 256
+BATCH_SIZE = 64
 NUM_ITERATIONS = 50000
 CHECKPOINT_DIR = './checkpoints/agent2'
 
@@ -265,8 +265,8 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
 
 if __name__ == "__main__":
     params = train_agent2(
-        batch_size=64,
-        num_iterations=150,
+        batch_size=16,
+        num_iterations=300,
         learning_rate=1e-4,
         lambda_param=0.7,
         verbose_every=1,

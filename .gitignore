@@ -15,3 +15,6 @@ checkpoints/
 Thumbs.db
 *.out
 *.err
+agent1.py 
+mctague/
+docs
