@@ -114,7 +114,7 @@ def get_first_submove_logits(policy_logits, legal_moves, state, player):
             continue
         
         # Get first submove
-        from_point, roll = move[0]
+        from_point, roll = int(move[0][0]), int(move[0][1])
         
         # Convert to canonical coordinates
         if player == 1:
@@ -149,7 +149,7 @@ def select_top_k_moves_by_first_submove(policy_logits, legal_moves, state, playe
         if len(move) == 0:
             continue
         
-        from_point, roll = move[0]
+        from_point, roll = int(move[0][0]), int(move[0][1])
         
         # Convert to canonical coordinates
         if player == 1:
@@ -226,6 +226,8 @@ def sample_move_sequentially(state, player, dice, params, model, rng_key):
         
         submove_logits = []
         for from_point, die_val in legal_submoves:
+            from_point = int(from_point)
+            die_val = int(die_val)
             # Convert to canonical coordinates
             if player == 1:
                 source = 0 if from_point == W_BAR else from_point
@@ -238,8 +240,8 @@ def sample_move_sequentially(state, player, dice, params, model, rng_key):
                 if dest > NUM_POINTS:
                     dest = 25
             
-            source = min(25, max(0, source))
-            dest = min(25, max(0, dest))
+            source = int(min(25, max(0, source)))
+            dest = int(min(25, max(0, dest)))
             idx = source * 25 + dest
             submove_logits.append(policy_logits[idx] if idx < 625 else -1e9)
         
@@ -439,26 +441,36 @@ def compute_gae(rewards, values, dones, gamma=GAMMA, lambda_=LAMBDA):
     return advantages, returns
 
 def compute_action_log_probs(policy_logits, actions, old_log_probs):
-    """Compute log probabilities for taken actions."""
+    """Compute log probabilities for taken actions (JAX-compatible)."""
     batch_size = policy_logits.shape[0]
-    log_probs = jnp.zeros(batch_size)
     
-    for i in range(batch_size):
+    # Pre-compute action indices outside JAX tracing
+    action_indices = []
+    for i in range(len(actions)):
         action = actions[i]
         if action is None or len(action) == 0:
-            log_probs = log_probs.at[i].set(old_log_probs[i])
-            continue
-        
-        total_log_prob = 0.0
-        for source, dest in action:
-            idx = source * 25 + dest
-            if idx < 625:
-                log_softmax_all = jax.nn.log_softmax(policy_logits[i])
-                total_log_prob += log_softmax_all[idx]
-        
-        log_probs = log_probs.at[i].set(total_log_prob)
+            action_indices.append([])
+        else:
+            indices = []
+            for source, dest in action:
+                source, dest = int(source), int(dest)
+                idx = source * 25 + dest
+                if idx < 625:
+                    indices.append(idx)
+            action_indices.append(indices)
     
-    return log_probs
+    # Compute log probs using JAX operations
+    log_probs_list = []
+    for i in range(batch_size):
+        indices = action_indices[i]
+        if len(indices) == 0:
+            log_probs_list.append(old_log_probs[i])
+        else:
+            log_softmax_all = jax.nn.log_softmax(policy_logits[i])
+            total = sum(log_softmax_all[idx] for idx in indices)
+            log_probs_list.append(total)
+    
+    return jnp.stack(log_probs_list)
 
 def compute_legal_move_mask(state, player, dice):
     """Create mask for legal submoves in policy grid."""
@@ -467,7 +479,7 @@ def compute_legal_move_mask(state, player, dice):
     
     for move in legal_moves:
         if len(move) > 0:
-            from_point, roll = move[0]
+            from_point, roll = int(move[0][0]), int(move[0][1])
             
             if player == 1:
                 source = 0 if from_point == W_BAR else from_point
@@ -480,8 +492,8 @@ def compute_legal_move_mask(state, player, dice):
                 if dest > NUM_POINTS:
                     dest = 25
             
-            source = min(25, max(0, source))
-            dest = min(25, max(0, dest))
+            source = int(min(25, max(0, source)))
+            dest = int(min(25, max(0, dest)))
             idx = source * 25 + dest
             if idx < 625:
                 mask[idx] = True
@@ -489,38 +501,41 @@ def compute_legal_move_mask(state, player, dice):
     return mask
 
 def compute_masked_entropy(policy_logits, states, players, dices):
-    """Compute entropy over legal moves only."""
-    batch_size = len(states)
-    entropies = []
+    """Compute entropy over legal moves only (JAX-compatible)."""
+    batch_size = policy_logits.shape[0]
+    
+    # Pre-compute masks outside JAX tracing
+    masks = []
+    for i in range(len(states)):
+        mask = compute_legal_move_mask(states[i], players[i], dices[i])
+        masks.append(mask)
+    
+    # Compute entropy using masking that works with JAX
+    total_entropy = 0.0
+    valid_count = 0
     
     for i in range(batch_size):
-        mask = compute_legal_move_mask(states[i], players[i], dices[i])
-        
+        mask = masks[i]
         if not np.any(mask):
-            entropies.append(0.0)
             continue
         
         logits_i = policy_logits[i]
-        legal_logits = logits_i[mask]
-        log_probs = jax.nn.log_softmax(legal_logits)
-        probs = jax.nn.softmax(legal_logits)
+        # Mask illegal actions with large negative value
+        masked_logits = jnp.where(jnp.array(mask), logits_i, -1e9)
+        log_probs = jax.nn.log_softmax(masked_logits)
+        probs = jax.nn.softmax(masked_logits)
         entropy_i = -jnp.sum(probs * log_probs)
-        entropies.append(float(entropy_i))
+        total_entropy = total_entropy + entropy_i
+        valid_count += 1
     
-    return jnp.mean(jnp.array(entropies))
+    if valid_count == 0:
+        return jnp.array(0.0)
+    return total_entropy / valid_count
 
-def ppo_loss(params, model, batch, old_log_probs, advantages, returns, epsilon=EPSILON_CLIP):
+def ppo_loss(params, apply_fn, board_batch, aux_batch, actions, states, players, dices,
+             old_log_probs, advantages, returns, epsilon=EPSILON_CLIP):
     """Compute PPO loss with clipped surrogate objective."""
-    states = batch['states']
-    players = batch['players']
-    dices = batch['dices']
-    actions = batch['actions']
-    
-    board_batch, aux_batch = batch_encode_states(states, players)
-    board_batch = jnp.array(board_batch)
-    aux_batch = jnp.array(aux_batch)
-    
-    values_pred, policy_logits = model.apply({'params': params}, board_batch, aux_batch)
+    values_pred, policy_logits = apply_fn({'params': params}, board_batch, aux_batch)
     values_pred = values_pred.flatten()
     
     # PPO clipped surrogate objective
@@ -540,6 +555,21 @@ def ppo_loss(params, model, batch, old_log_probs, advantages, returns, epsilon=E
     # L = L_policy + c1*L_value - c2*entropy
     total_loss = policy_loss + C1 * value_loss - C2 * entropy
     
+    # Return JAX arrays for metrics - convert to float outside grad
+    return total_loss, (policy_loss, value_loss, entropy, total_loss)
+
+def train_step(state, board_batch, aux_batch, actions, states, players, dices,
+               old_log_probs, advantages, returns):
+    """Single training step."""
+    def loss_fn(params):
+        return ppo_loss(params, state.apply_fn, board_batch, aux_batch, actions,
+                        states, players, dices, old_log_probs, advantages, returns)
+    
+    (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+    state = state.apply_gradients(grads=grads)
+    
+    # Convert metrics to dict after grad computation
+    policy_loss, value_loss, entropy, total_loss = aux
     metrics = {
         'policy_loss': float(policy_loss),
         'value_loss': float(value_loss),
@@ -547,21 +577,10 @@ def ppo_loss(params, model, batch, old_log_probs, advantages, returns, epsilon=E
         'total_loss': float(total_loss)
     }
     
-    return total_loss, metrics
-
-@jax.jit
-def train_step(state, batch, old_log_probs, advantages, returns):
-    """Single training step."""
-    def loss_fn(params):
-        return ppo_loss(params, state.apply_fn, batch, old_log_probs, advantages, returns)
-    
-    (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-    state = state.apply_gradients(grads=grads)
-    
     return state, metrics
 
 def train_ppo(num_iterations=10000, batch_size=BATCH_SIZE, buffer_size=BUFFER_SIZE,
-              checkpoint_dir='/tmp/agent3_checkpoints', verbose_every=10):
+              checkpoint_dir='/home/zhangdjr/projects/RL-Gammon/checkpoints/agent3', verbose_every=10):
     """Train Agent 3 using PPO."""
     print(f"Training Agent 3 (PPO) | batch={batch_size}, buffer={buffer_size}")
     print("-" * 60)
@@ -610,7 +629,7 @@ def train_ppo(num_iterations=10000, batch_size=BATCH_SIZE, buffer_size=BUFFER_SI
                         white_wins += 1
                     else:
                         black_wins += 1
-                    new_state, new_player, new_dice = _new_game()
+                    new_player, new_dice, new_state = _new_game()
                     states[i] = new_state
                     players[i] = new_player
                     dices[i] = new_dice
@@ -632,19 +651,23 @@ def train_ppo(num_iterations=10000, batch_size=BATCH_SIZE, buffer_size=BUFFER_SI
                     end_idx = min(start_idx + MINIBATCH_SIZE, len(buffer))
                     mb_indices = indices[start_idx:end_idx]
                     
-                    mb_batch = {
-                        'states': batch_data['states'][mb_indices],
-                        'players': batch_data['players'][mb_indices],
-                        'dices': batch_data['dices'][mb_indices],
-                        'actions': [batch_data['actions'][i] for i in mb_indices]
-                    }
+                    mb_states = batch_data['states'][mb_indices]
+                    mb_players = batch_data['players'][mb_indices]
+                    mb_dices = batch_data['dices'][mb_indices]
+                    mb_actions = [batch_data['actions'][i] for i in mb_indices]
                     mb_old_log_probs = batch_data['log_probs'][mb_indices]
                     mb_advantages = advantages[mb_indices]
                     mb_returns = returns[mb_indices]
                     
+                    # Encode batch BEFORE calling train_step (Numba can't run inside JAX grad)
+                    mb_board, mb_aux = batch_encode_states(mb_states, mb_players)
+                    mb_board = jnp.array(mb_board)
+                    mb_aux = jnp.array(mb_aux)
+                    
                     train_state_obj, metrics = train_step(
-                        train_state_obj, mb_batch, mb_old_log_probs,
-                        mb_advantages, mb_returns
+                        train_state_obj, mb_board, mb_aux, mb_actions,
+                        mb_states, mb_players, mb_dices,
+                        mb_old_log_probs, mb_advantages, mb_returns
                     )
             
             buffer.clear()
@@ -657,6 +680,15 @@ def train_ppo(num_iterations=10000, batch_size=BATCH_SIZE, buffer_size=BUFFER_SI
                 white_wins = 0
                 black_wins = 0
                 total_games = 0
+        
+        # Periodic checkpointing every 100 iterations
+        if (iteration + 1) % 100 == 0:
+            checkpoint_path = pathlib.Path(checkpoint_dir)
+            checkpoint_path.mkdir(parents=True, exist_ok=True)
+            checkpointer = ocp.StandardCheckpointer()
+            checkpointer.save(checkpoint_path / f'checkpoint_{iteration + 1}', train_state_obj.params, force=True)
+            checkpointer.close()
+            print(f"Checkpoint saved at iteration {iteration + 1}")
     
     print("-" * 60)
     print("Training complete!")
@@ -767,10 +799,10 @@ if __name__ == "__main__":
     if mode == "train":
         print("Starting PPO training...")
         params = train_ppo(
-            num_iterations=1000,
+            num_iterations=300,
             batch_size=128,
             buffer_size=2048,
-            checkpoint_dir='/tmp/agent3_checkpoints',
+            checkpoint_dir='/home/zhangdjr/projects/RL-Gammon/checkpoints/agent3',
             verbose_every=10
         )
         print("\nTraining complete!")
