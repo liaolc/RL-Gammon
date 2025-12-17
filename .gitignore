@@ -13,3 +13,5 @@ checkpoints/
 *.swo
 .DS_Store
 Thumbs.db
+*.out
+*.err
