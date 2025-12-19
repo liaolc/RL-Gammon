@@ -31,7 +31,7 @@ sbatch train_agent4.sl
 ```bash
 sbatch run_gammon.sl
 ```
-See `agent2_tdl.py` for hyperparameters. To resume from checkpoint, add `resume_from=<path>`.
+Note: You may run into issues if the machine's cuda has compatibility issues with JAX
 
 ## Loading Weights
 
