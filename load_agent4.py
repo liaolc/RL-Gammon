@@ -78,6 +78,5 @@ def encode_observation(state, player):
 
 if __name__ == '__main__':
     params, model = load_agent4()
-    dummy_obs = jnp.zeros((1, 28))
-    state, policy, value = get_initial_inference(params, model, dummy_obs)
-    print(f"Loaded Agent 4: value={float(value[0]):.4f}, policy_shape={policy.shape}")
+    num_params = sum(x.size for x in jax.tree_util.tree_leaves(params))
+    print(f"Loaded Agent 4: {num_params:,} parameters")

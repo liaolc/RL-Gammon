@@ -57,7 +57,5 @@ def get_value_and_policy(params, model, board_features, aux_features):
 
 if __name__ == '__main__':
     params, model = load_agent3()
-    dummy_board = jnp.zeros((1, BOARD_LENGTH, CONV_INPUT_CHANNELS))
-    dummy_aux = jnp.zeros((1, AUX_INPUT_SIZE))
-    value, policy = get_value_and_policy(params, model, dummy_board, dummy_aux)
-    print(f"Loaded Agent 3: value={float(value[0]):.4f}, policy_shape={policy.shape}")
+    num_params = sum(x.size for x in jax.tree_util.tree_leaves(params))
+    print(f"Loaded Agent 3: {num_params:,} parameters")

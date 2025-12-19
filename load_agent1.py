@@ -27,4 +27,4 @@ def get_value(state, player, weights):
 
 if __name__ == '__main__':
     weights = load_agent1()
-    print(f"Loaded weights: shape={weights.shape}, mean={weights.mean():.4f}")
+    print(f"Loaded Agent 1: {weights.size:,} parameters")
