@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-from jax.tree_util import tree_map
 import optax
 import numpy as np
 from backgammon_engine import (
@@ -13,6 +12,7 @@ from backgammon_engine import (
 from backgammon_value_net import BackgammonValueNet, BOARD_LENGTH, CONV_INPUT_CHANNELS, AUX_INPUT_SIZE
 import orbax.checkpoint as ocp
 import pathlib
+from datetime import datetime
 
 LEARNING_RATE = 1e-4
 LAMBDA = 0.7
@@ -153,28 +153,72 @@ def load_checkpoint(checkpoint_name):
 
     params = checkpointer.restore(restore_path)
     return model, params
+def true_online_td_lambda_update(params, traces, grads, values, next_values, rewards, 
+                                 alpha, lambda_param, gamma):
+    """
+    Implements the specific True Online TD(lambda) updates from the PDF.
+    
+    Args:
+        values: V(S_t)
+        next_values: V(S_{t+1})
+        grads: ∇V(S_t)
+    """
+    # 1. Calculate TD Error (delta)
+    # δ_t = R_{t+1} + γV(S_{t+1}) - V(S_t)
+    td_errors = rewards + gamma * next_values - values
 
-def td_lambda_update(params, opt_state, optimizer, traces, grads, td_errors, lambda_param, gamma):
-    """Classical TD(λ) update with per-game traces."""
-    batch_size = td_errors.shape[0]
+    # 2. Update Eligibility Traces (z_t)
+    # z_t = γλ z_{t-1} + g_t - αγλ(z_{t-1} · g_t)g_t
+    # We need the dot product (z_{t-1} · g_t) for each sample in batch
+    def update_trace_single(z, g):
+        dot_prod = jnp.sum(z * g) # Dot product of weights and gradients
+        term1 = gamma * lambda_param * z
+        term2 = g
+        term3 = alpha * gamma * lambda_param * dot_prod * g
+        return term1 + term2 - term3
+    
+    # Apply over batch
+    new_traces = jax.tree.map(lambda z, g: jax.vmap(update_trace_single)(z, g), traces, grads)
 
-    # Update traces: z_t = γλ z_{t-1} + g_t
-    new_traces = tree_map(
-        lambda z, g: gamma * lambda_param * z + g,
-        traces,
-        grads
+    # 3. Calculate Weight Update (Δw)
+    # w_{t+1} = w_t + α δ_t z_t + α(V(S_t) - g_t · w_t)(z_t - g_t)
+    # Note: For non-linear V, (V - g·w) is non-zero.
+    
+    # We need to compute (g_t · w_t). 
+    # This is tricky in JAX with pytrees. We sum dot products across all leaves.
+    def compute_gw_dot(g_tree, w_tree):
+        # Flatten trees to vectors and dot them
+        leaves_g, _ = jax.tree_util.tree_flatten(g_tree)
+        leaves_w, _ = jax.tree_util.tree_flatten(w_tree)
+        total = 0.
+        for g, w in zip(leaves_g, leaves_w):
+             # w is (params), g is (batch, params). Broadcast w.
+             total += jnp.sum(g * w[None, ...], axis=list(range(1, g.ndim)))
+        return total
+
+    gw_dot = compute_gw_dot(grads, params)
+    
+    # Correction scalar: α(V(S_t) - g_t · w_t)
+    correction_scalar = alpha * (values - gw_dot)
+    
+    def compute_weight_delta(z, g, delta, corr):
+        term1 = alpha * delta * z
+        term2 = corr * (z - g)
+        return term1 + term2
+
+    # Note: delta and correction_scalar are vectors of size (batch,)
+    # reshape them to broadcast against z and g
+    updates = jax.tree.map(
+        lambda z, g: jax.vmap(compute_weight_delta)(
+            z, g, td_errors, correction_scalar
+        ),
+        new_traces, grads
     )
+    
+    final_updates = jax.tree.map(lambda u: jnp.sum(u, axis=0), updates)
+    new_params = optax.apply_updates(params, final_updates) # Or just params + final_updates
 
-    # Weight update: w_{t+1} = w_t + α Σ_i δ_t^(i) z_t^(i)
-    def scale_and_sum(z):
-        td_errors_reshaped = td_errors.reshape((batch_size,) + (1,) * (z.ndim - 1))
-        return jnp.sum(td_errors_reshaped * z, axis=0)
-
-    summed_updates = tree_map(scale_and_sum, new_traces)
-    updates, new_opt_state = optimizer.update(summed_updates, opt_state, params)
-    new_params = optax.apply_updates(params, updates)
-
-    return new_params, new_opt_state, new_traces
+    return new_params, new_traces
 
 def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
                  learning_rate=LEARNING_RATE, lambda_param=LAMBDA,
@@ -184,13 +228,17 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
     Args:
         batch_size: Number of parallel games
         num_iterations: Number of training iterations
-        learning_rate: Adam learning rate
+        learning_rate: SGD learning rate
         lambda_param: TD(λ) parameter
         verbose_every: Print progress every N iterations
         checkpoint_every: Save checkpoint every N iterations
         resume_from: Path to checkpoint to resume from (e.g., 'checkpoint_30' or full path)
     """
     print(f"Training Agent 2: batch={batch_size}, iters={num_iterations}, lr={learning_rate}, λ={lambda_param}")
+
+    # Create unique run directory with timestamp
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_checkpoint_dir = pathlib.Path(CHECKPOINT_DIR) / f"run_{run_id}"
 
     # Initialize model and optimizer
     model = BackgammonValueNet()
@@ -214,11 +262,11 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
         params = checkpointer.restore(resume_path)
         print("Checkpoint loaded successfully")
 
-    optimizer = optax.adam(learning_rate=learning_rate)
-    opt_state = optimizer.init(params)
+    # optimizer = optax.sgd(learning_rate=learning_rate)
+    # opt_state = optimizer.init(params)
     
     # Initialize per-game eligibility traces
-    traces = tree_map(lambda p: jnp.zeros((batch_size,) + p.shape, dtype=p.dtype), params)
+    traces = jax.tree.map(lambda p: jnp.zeros((batch_size,) + p.shape, dtype=p.dtype), params)
     
     states, players, dices = _vectorized_new_game(batch_size)
     total_games = white_wins = black_wins = 0
@@ -263,12 +311,18 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
         prev_values_pred = (prev_values_pred * 3.0).flatten()
         prev_values_pred = np.array(prev_values_pred, dtype=np.float32)
         
-        # TD(λ) update: compute TD errors, gradients, and update params
-        td_errors = rewards + GAMMA * next_values - prev_values_pred
-        td_errors_jax = jnp.array(td_errors)
+        # TD update
         grads = compute_value_gradients(params, model, prev_planes, prev_aux)
-        params, opt_state, traces = td_lambda_update(
-            params, opt_state, optimizer, traces, grads, td_errors_jax, lambda_param, GAMMA
+        params, traces = true_online_td_lambda_update(
+            params, 
+            traces, 
+            grads, 
+            jnp.array(prev_values_pred),  
+            jnp.array(next_values),      
+            jnp.array(rewards), 
+            learning_rate, 
+            lambda_param, 
+            GAMMA
         )
         
         # Reset traces for finished games
@@ -277,7 +331,7 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
             def reset_finished_traces(z):
                 mask = (1.0 - game_over_jax).reshape((batch_size,) + (1,) * (z.ndim - 1))
                 return z * mask
-            traces = tree_map(reset_finished_traces, traces)
+            traces = jax.tree.map(reset_finished_traces, traces)
         
         td_targets = rewards + GAMMA * next_values
         td_targets_jax = jnp.array(td_targets)
@@ -323,5 +377,5 @@ if __name__ == "__main__":
         lambda_param=0.7,
         verbose_every=1,
         checkpoint_every=30,
-        resume_from="/scratch/liaolc/RL-Gammon/checkpoints/agent2/checkpoint_30"
+        #resume_from="/scratch/liaolc/RL-Gammon/checkpoints/agent2/checkpoint_30"
     )
