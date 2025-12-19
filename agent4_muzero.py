@@ -20,7 +20,6 @@ from backgammon_muzero_net import (
     dice_to_index, index_to_dice, DICE_PROBS
 )
 
-# Hyperparameters (from paper's backgammon config)
 LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 1e-4
 DISCOUNT = 1.0
@@ -37,7 +36,6 @@ KNOWN_BOUNDS = (-3.0, 3.0)
 
 @njit
 def encode_observation(state, player):
-    """Encode board state to observation vector."""
     canonical = _to_canonical(state, player)
     obs = np.zeros(28, dtype=np.float32)
     for i in range(28):
@@ -46,7 +44,6 @@ def encode_observation(state, player):
 
 
 def encode_move_features(move):
-    """Encode move as (from, die) pairs - exact representation."""
     features = np.zeros(MAX_SUBMOVES * 2, dtype=np.float32)
     if move is None:
         return features
@@ -61,7 +58,6 @@ def encode_move_features(move):
 
 
 def encode_dice_onehot(dice):
-    """Encode dice roll as one-hot over 21 outcomes."""
     onehot = np.zeros(NUM_DICE_OUTCOMES, dtype=np.float32)
     idx = dice_to_index(dice[0], dice[1])
     onehot[idx] = 1.0
@@ -69,7 +65,6 @@ def encode_dice_onehot(dice):
 
 
 class MinMaxStats:
-    """Track min-max values for normalization."""
     def __init__(self):
         self.minimum = KNOWN_BOUNDS[0]
         self.maximum = KNOWN_BOUNDS[1]
@@ -85,7 +80,6 @@ class MinMaxStats:
 
 
 class Node:
-    """MCTS tree node."""
     def __init__(self, prior: float, is_chance: bool = False):
         self.visit_count = 0
         self.prior = prior
@@ -106,7 +100,6 @@ class Node:
 
 
 def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats) -> float:
-    """pUCT formula."""
     pb_c = math.log((parent.visit_count + PB_C_BASE + 1) / PB_C_BASE) + PB_C_INIT
     pb_c *= math.sqrt(parent.visit_count) / (child.visit_count + 1)
     prior_score = pb_c * child.prior
@@ -120,9 +113,7 @@ def ucb_score(parent: Node, child: Node, min_max_stats: MinMaxStats) -> float:
 
 
 def select_child(node: Node, min_max_stats: MinMaxStats) -> Tuple[Any, 'Node']:
-    """Select child during MCTS traversal."""
     if node.is_chance:
-        # For chance nodes: quasi-random sampling P(c) / (N(c) + 1)
         best_score = -float('inf')
         best_outcome = None
         best_child = None
@@ -136,7 +127,6 @@ def select_child(node: Node, min_max_stats: MinMaxStats) -> Tuple[Any, 'Node']:
         
         return best_outcome, best_child
     
-    # For decision nodes: pUCT
     best_score = -float('inf')
     best_action = None
     best_child = None
@@ -153,9 +143,7 @@ def select_child(node: Node, min_max_stats: MinMaxStats) -> Tuple[Any, 'Node']:
 
 def backpropagate(search_path: PyList[Node], value: float, to_play: int,
                   min_max_stats: MinMaxStats):
-    """Backpropagate value through search path."""
     for node in reversed(search_path):
-        # Flip value for opponent
         node.value_sum += value if node.to_play == to_play else -value
         node.visit_count += 1
         min_max_stats.update(node.value())
@@ -163,12 +151,9 @@ def backpropagate(search_path: PyList[Node], value: float, to_play: int,
 
 
 def add_exploration_noise(node: Node):
-    """Add Dirichlet noise to root prior."""
     actions = list(node.children.keys())
     if len(actions) == 0:
         return
-    
-    # Adaptive alpha: 1/sqrt(num_legal_moves)
     alpha = 1.0 / math.sqrt(len(actions))
     noise = np.random.dirichlet([alpha] * len(actions))
     
@@ -180,15 +165,11 @@ def add_exploration_noise(node: Node):
 
 
 def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS):
-    """Run stochastic MCTS with explicit dice modeling."""
     min_max_stats = MinMaxStats()
-    
-    # Get legal moves - ONLY legal moves
     legal_moves, legal_afterstates = _actions(state, player, dice)
     if len(legal_moves) == 0:
         return None, 0.0, {}
     
-    # Initial inference
     obs = encode_observation(state, player)
     obs_batch = jnp.array([obs])
     
@@ -199,8 +180,6 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
     latent_state = np.array(latent_state[0])
     policy_logits = np.array(policy_logits[0])
     value = float(value[0])
-    
-    # Compute policy over LEGAL moves only
     num_legal = len(legal_moves)
     if num_legal > len(policy_logits):
         # Extend with zeros if needed
@@ -213,20 +192,15 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
     legal_logits = legal_logits - np.max(legal_logits)
     exp_logits = np.exp(legal_logits)
     policy_probs = exp_logits / exp_logits.sum()
-    
-    # Create root node (decision node)
     root = Node(prior=0.0, is_chance=False)
     root.state = latent_state
     root.to_play = player
-    
-    # Expand with ONLY legal moves (move_idx -> Node)
     for move_idx, prob in enumerate(policy_probs):
         root.children[move_idx] = Node(prior=prob, is_chance=True)
     
     backpropagate([root], value, player, min_max_stats)
     add_exploration_noise(root)
     
-    # Run simulations
     for _ in range(num_simulations):
         node = root
         search_path = [node]
@@ -235,7 +209,6 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
         sim_dice = dice
         sim_legal_moves = legal_moves
         
-        # Selection: traverse until leaf
         while node.expanded():
             action_or_outcome, child = select_child(node, min_max_stats)
             if child is None:
@@ -247,7 +220,6 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
             if not node.is_chance and len(search_path) >= 2:
                 parent = search_path[-2]
                 if parent.is_chance:
-                    # We just selected a dice outcome
                     dice_idx = action_or_outcome
                     sim_dice = index_to_dice(dice_idx)
                     sim_legal_moves, _ = _actions(sim_state, sim_player, sim_dice)
@@ -257,7 +229,6 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
         
         parent = search_path[-2]
         
-        # Expansion
         if parent.is_chance:
             # Parent is chance node (afterstate) -> expand decision node
             # Get dice outcome that led here
@@ -270,7 +241,6 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
             if dice_idx is None:
                 continue
             
-            # g(afterstate, dice) -> (next_state, reward)
             dice_onehot = np.zeros(NUM_DICE_OUTCOMES, dtype=np.float32)
             dice_onehot[dice_idx] = 1.0
             
@@ -305,14 +275,12 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
                 exp_opp = np.exp(opp_logits)
                 opp_probs = exp_opp / exp_opp.sum()
                 
-                # Expand with opponent's legal moves
                 for move_idx, prob in enumerate(opp_probs):
                     node.children[move_idx] = Node(prior=prob, is_chance=True)
             
             value = float(value[0])
         
         else:
-            # Parent is decision node -> expand chance node (afterstate)
             move_idx = None
             for act, child in parent.children.items():
                 if child is node:
@@ -323,8 +291,6 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
                 continue
             
             move = sim_legal_moves[move_idx]
-            
-            # φ(state, action) -> afterstate, ψ(afterstate) -> Q
             move_features = encode_move_features(move)
             
             state_batch = jnp.array([parent.state])
@@ -338,8 +304,6 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
             node.state = np.array(afterstate[0])
             node.is_chance = True
             node.to_play = sim_player
-            
-            # Expand with all 21 dice outcomes (known probabilities)
             for dice_idx in range(NUM_DICE_OUTCOMES):
                 prob = float(DICE_PROBS[dice_idx])
                 node.children[dice_idx] = Node(prior=prob, is_chance=False)
@@ -348,7 +312,6 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
         
         backpropagate(search_path, value, player, min_max_stats)
     
-    # Select action based on visit counts
     visit_counts = {move_idx: child.visit_count 
                     for move_idx, child in root.children.items()}
     total_visits = sum(visit_counts.values())
@@ -356,10 +319,7 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
     if total_visits == 0:
         return legal_moves[0], root.value(), {}
     
-    # Select move with most visits
     best_move_idx = max(visit_counts.keys(), key=lambda m: visit_counts[m])
-    
-    # Build search policy
     search_policy = {}
     for move_idx, count in visit_counts.items():
         search_policy[move_idx] = count / total_visits
@@ -368,7 +328,6 @@ def run_mcts(state, player, dice, params, model, num_simulations=NUM_SIMULATIONS
 
 
 class ReplayBuffer:
-    """Stores game trajectories."""
     def __init__(self, capacity=BUFFER_SIZE):
         self.capacity = capacity
         self.buffer = []
@@ -398,7 +357,6 @@ class ReplayBuffer:
 
 
 def compute_value_target(trajectory, state_idx):
-    """Compute Monte Carlo return."""
     if len(trajectory) == 0:
         return 0.0
     
@@ -413,8 +371,6 @@ def compute_value_target(trajectory, state_idx):
 
 
 def train_step(params, model, optimizer, opt_state, batch):
-    """Single training step."""
-    
     def loss_fn(p):
         total_loss = 0.0
         num_samples = 0
@@ -426,45 +382,36 @@ def train_step(params, model, optimizer, opt_state, batch):
             step = traj[state_idx]
             obs_batch = jnp.array([step['observation']])
             
-            # Initial inference
             state, policy_logits, value = model.apply(
                 {'params': p}, obs_batch,
                 method=model.initial_inference
             )
             
-            # Value loss
             value_target = compute_value_target(traj, state_idx)
             total_loss += (value[0] - value_target) ** 2
             
-            # Policy loss (cross-entropy with search policy)
             if 'search_policy' in step and step['search_policy']:
                 log_probs = jax.nn.log_softmax(policy_logits[0])
                 for move_idx, prob in step['search_policy'].items():
                     if move_idx < len(log_probs):
                         total_loss -= prob * log_probs[move_idx]
             
-            # Unroll for K steps
             for k in range(min(NUM_UNROLL_STEPS, len(traj) - state_idx - 1)):
                 next_step = traj[state_idx + k + 1]
                 
-                # Afterstate dynamics
                 move_features = jnp.array([step['move_features']])
                 afterstate, q_value = model.apply(
                     {'params': p}, state, move_features,
                     method=model.recurrent_inference_afterstate
                 )
                 
-                # Q-value loss
                 total_loss += (q_value[0] - value_target) ** 2
-                
-                # Dynamics with actual dice
                 dice_onehot = jnp.array([next_step['dice_onehot']])
                 state, reward, policy_logits, value = model.apply(
                     {'params': p}, afterstate, dice_onehot,
                     method=model.recurrent_inference_state
                 )
                 
-                # Reward loss
                 actual_reward = next_step.get('reward', 0.0)
                 total_loss += (reward[0] - actual_reward) ** 2
                 
@@ -485,42 +432,28 @@ def train_step(params, model, optimizer, opt_state, batch):
 def train_stochastic_muzero(num_iterations=1000, games_per_iter=5,
                             checkpoint_dir='/home/zhangdjr/Desktop/RL-Gammon/checkpoints/agent4',
                             verbose_every=10):
-    """Main training loop."""
-    print(f"Training Agent 4 (Stochastic MuZero)")
-    print(f"Simulations: {NUM_SIMULATIONS}, Batch: {BATCH_SIZE}")
-    print("-" * 60)
-    
-    # Initialize model
+    print(f"Training Agent 4: sims={NUM_SIMULATIONS}, batch={BATCH_SIZE}")
     model = StochasticMuZeroNetwork(hidden_size=HIDDEN_SIZE, max_moves=500)
     rng = random.PRNGKey(42)
-    
-    # Initialize parameters
     dummy_obs = jnp.zeros((1, 28))
     dummy_move = jnp.zeros((1, MAX_SUBMOVES * 2))
     dummy_dice = jnp.zeros((1, NUM_DICE_OUTCOMES))
     
     params = model.init(rng, dummy_obs, dummy_move, dummy_dice)['params']
-    
-    # Optimizer
     optimizer = optax.adamw(learning_rate=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     opt_state = optimizer.init(params)
-    
-    # Replay buffer
     buffer = ReplayBuffer()
     
     total_games = 0
     white_wins = 0
     
     for iteration in range(num_iterations):
-        # Self-play
         for _ in range(games_per_iter):
             trajectory = []
             player, dice, state = _new_game()
             
             while True:
                 obs = encode_observation(state, player)
-                
-                # Run MCTS (reduced simulations for training)
                 move, search_value, search_policy = run_mcts(
                     state, player, dice, params, model,
                     num_simulations=min(100, NUM_SIMULATIONS)
@@ -539,7 +472,6 @@ def train_stochastic_muzero(num_iterations=1000, games_per_iter=5,
                     'reward': 0.0
                 })
                 
-                # Apply move
                 if move is None:
                     move = List()
                 new_state = _apply_move(state, player, move)
@@ -558,7 +490,6 @@ def train_stochastic_muzero(num_iterations=1000, games_per_iter=5,
             
             buffer.save(trajectory)
         
-        # Training
         if len(buffer) >= 10:
             batch = buffer.sample_batch(min(BATCH_SIZE, len(buffer) * 5))
             if batch:
@@ -566,28 +497,20 @@ def train_stochastic_muzero(num_iterations=1000, games_per_iter=5,
                     params, model, optimizer, opt_state, batch
                 )
         
-        # Progress report and memory cleanup
         if (iteration + 1) % verbose_every == 0:
             win_rate = white_wins / max(total_games, 1)
             print(f"Iter {iteration + 1}/{num_iterations} | "
                   f"Games: {total_games} | White: {win_rate:.1%} | "
                   f"Buffer: {len(buffer)}")
-            # Clear JAX caches and run garbage collection to prevent OOM
             jax.clear_caches()
             gc.collect()
-            
-            # Periodic checkpoint every 10 iterations
             checkpoint_path = pathlib.Path(checkpoint_dir)
             checkpoint_path.mkdir(parents=True, exist_ok=True)
             checkpointer = ocp.StandardCheckpointer()
             checkpointer.save(checkpoint_path / f'checkpoint_{iteration + 1}', params, force=True)
             checkpointer.close()
-            print(f"Checkpoint saved at iteration {iteration + 1}")
     
-    print("-" * 60)
-    print("Training complete!")
-    
-    # Save checkpoint
+    print("Training complete")
     checkpoint_path = pathlib.Path(checkpoint_dir)
     checkpoint_path.mkdir(parents=True, exist_ok=True)
     checkpointer = ocp.StandardCheckpointer()
@@ -599,7 +522,6 @@ def train_stochastic_muzero(num_iterations=1000, games_per_iter=5,
 
 
 def load_agent(checkpoint_path):
-    """Load trained agent."""
     model = StochasticMuZeroNetwork(hidden_size=HIDDEN_SIZE, max_moves=500)
     checkpointer = ocp.StandardCheckpointer()
     params = checkpointer.restore(pathlib.Path(checkpoint_path))
@@ -608,7 +530,6 @@ def load_agent(checkpoint_path):
 
 
 def select_move(state, player, dice, params, model):
-    """Select move using MCTS (for competition)."""
     move, _, _ = run_mcts(state, player, dice, params, model, NUM_SIMULATIONS)
     return move
 
@@ -618,7 +539,6 @@ if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "train"
     
     if mode == "train":
-        print("Starting Stochastic MuZero training...")
         params = train_stochastic_muzero(
             num_iterations=5000,
             games_per_iter=3,

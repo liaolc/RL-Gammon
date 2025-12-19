@@ -33,7 +33,6 @@ TOP_K_MOVES = 5
 
 @njit
 def encode_state_features(state, player):
-    """Encode state into 15 feature planes + 6 aux features."""
     board_features = np.zeros((BOARD_LENGTH, CONV_INPUT_CHANNELS), dtype=np.float32)
     canonical_state = _to_canonical(state, player)
     
@@ -43,7 +42,6 @@ def encode_state_features(state, player):
         if checkers == 0:
             board_features[point_idx - 1, 0] = 1.0
         
-        # Planes 1-7: Player checkers (Blot, Made, Builder, Anchors, Overflow)
         if checkers > 0:
             board_features[point_idx - 1, 1] = 1.0 if checkers == 1 else 0.0
             board_features[point_idx - 1, 2] = 1.0 if checkers == 2 else 0.0
@@ -53,7 +51,6 @@ def encode_state_features(state, player):
             board_features[point_idx - 1, 6] = 1.0 if checkers == 6 else 0.0
             board_features[point_idx - 1, 7] = max(0.0, (checkers - 6) / 9.0)
         
-        # Planes 8-14: Opponent checkers (same structure)
         if checkers < 0:
             abs_checkers = abs(checkers)
             board_features[point_idx - 1, 8] = 1.0 if abs_checkers == 1 else 0.0
@@ -86,7 +83,6 @@ def batch_encode_states(states, players):
     return board_batch, aux_batch
 
 def encode_move_to_canonical(move, state, player):
-    """Encode move to canonical (source, dest) pairs."""
     encoded_submoves = []
     for from_point, roll in move:
         if player == 1:
@@ -105,7 +101,6 @@ def encode_move_to_canonical(move, state, player):
     return encoded_submoves
 
 def get_first_submove_logits(policy_logits, legal_moves, state, player):
-    """Get logits for the first submove of each legal move."""
     first_submove_logits = []
     
     for move in legal_moves:
@@ -113,10 +108,7 @@ def get_first_submove_logits(policy_logits, legal_moves, state, player):
             first_submove_logits.append(-1e9)
             continue
         
-        # Get first submove
         from_point, roll = int(move[0][0]), int(move[0][1])
-        
-        # Convert to canonical coordinates
         if player == 1:
             source = 0 if from_point == W_BAR else from_point
             dest = from_point + roll
@@ -138,7 +130,6 @@ def get_first_submove_logits(policy_logits, legal_moves, state, player):
     return np.array(first_submove_logits, dtype=np.float32)
 
 def select_top_k_moves_by_first_submove(policy_logits, legal_moves, state, player, k):
-    """Select moves by grouping by first submove until >= k moves accumulated."""
     if len(legal_moves) <= k:
         return np.arange(len(legal_moves))
     
@@ -189,7 +180,6 @@ def select_top_k_moves_by_logits(move_logits, k):
     return np.argsort(move_logits)[-k:][::-1]
 
 def sample_move_sequentially(state, player, dice, params, model, rng_key):
-    """Sample move by sequentially sampling submoves with masking."""
     dice_list = [dice[0], dice[1]]
     if dice[0] == dice[1]:
         dice_list = [dice[0], dice[0], dice[0], dice[0]]
@@ -228,7 +218,6 @@ def sample_move_sequentially(state, player, dice, params, model, rng_key):
         for from_point, die_val in legal_submoves:
             from_point = int(from_point)
             die_val = int(die_val)
-            # Convert to canonical coordinates
             if player == 1:
                 source = 0 if from_point == W_BAR else from_point
                 dest = from_point + die_val
@@ -272,7 +261,6 @@ def sample_move_sequentially(state, player, dice, params, model, rng_key):
     return move, total_log_prob, encoded_move
 
 def pruned_2_ply_search(state, player, dice, params, model, rng_key=None, training=False):
-    """2-ply search with policy pruning. Returns (move, value, log_prob, encoded_move)."""
     player_moves, player_afterstates = _actions(state, player, dice)
     
     if len(player_moves) == 0:
@@ -347,7 +335,6 @@ def pruned_2_ply_search(state, player, dice, params, model, rng_key=None, traini
     else:
         values = np.array([])
     
-    # E[V] = Σ P(dice) * min_{opp_move} V(afterstate)
     best_value = -np.inf
     best_move_idx = top_k_indices[0]
     
@@ -422,7 +409,6 @@ class ReplayBuffer:
         return len(self.states)
 
 def compute_gae(rewards, values, dones, gamma=GAMMA, lambda_=LAMBDA):
-    """Compute GAE advantages and returns."""
     advantages = np.zeros_like(rewards, dtype=np.float32)
     last_advantage = 0.0
     
@@ -441,10 +427,7 @@ def compute_gae(rewards, values, dones, gamma=GAMMA, lambda_=LAMBDA):
     return advantages, returns
 
 def compute_action_log_probs(policy_logits, actions, old_log_probs):
-    """Compute log probabilities for taken actions (JAX-compatible)."""
     batch_size = policy_logits.shape[0]
-    
-    # Pre-compute action indices outside JAX tracing
     action_indices = []
     for i in range(len(actions)):
         action = actions[i]
@@ -459,7 +442,6 @@ def compute_action_log_probs(policy_logits, actions, old_log_probs):
                     indices.append(idx)
             action_indices.append(indices)
     
-    # Compute log probs using JAX operations
     log_probs_list = []
     for i in range(batch_size):
         indices = action_indices[i]
@@ -473,7 +455,6 @@ def compute_action_log_probs(policy_logits, actions, old_log_probs):
     return jnp.stack(log_probs_list)
 
 def compute_legal_move_mask(state, player, dice):
-    """Create mask for legal submoves in policy grid."""
     mask = np.zeros(625, dtype=bool)
     legal_moves, _ = _actions(state, player, dice)
     
@@ -501,16 +482,12 @@ def compute_legal_move_mask(state, player, dice):
     return mask
 
 def compute_masked_entropy(policy_logits, states, players, dices):
-    """Compute entropy over legal moves only (JAX-compatible)."""
     batch_size = policy_logits.shape[0]
-    
-    # Pre-compute masks outside JAX tracing
     masks = []
     for i in range(len(states)):
         mask = compute_legal_move_mask(states[i], players[i], dices[i])
         masks.append(mask)
     
-    # Compute entropy using masking that works with JAX
     total_entropy = 0.0
     valid_count = 0
     
@@ -520,7 +497,6 @@ def compute_masked_entropy(policy_logits, states, players, dices):
             continue
         
         logits_i = policy_logits[i]
-        # Mask illegal actions with large negative value
         masked_logits = jnp.where(jnp.array(mask), logits_i, -1e9)
         log_probs = jax.nn.log_softmax(masked_logits)
         probs = jax.nn.softmax(masked_logits)
@@ -534,11 +510,8 @@ def compute_masked_entropy(policy_logits, states, players, dices):
 
 def ppo_loss(params, apply_fn, board_batch, aux_batch, actions, states, players, dices,
              old_log_probs, advantages, returns, epsilon=EPSILON_CLIP):
-    """Compute PPO loss with clipped surrogate objective."""
     values_pred, policy_logits = apply_fn({'params': params}, board_batch, aux_batch)
     values_pred = values_pred.flatten()
-    
-    # PPO clipped surrogate objective
     new_log_probs = compute_action_log_probs(policy_logits, actions, old_log_probs)
     old_log_probs_jax = jnp.array(old_log_probs)
     ratio = jnp.exp(new_log_probs - old_log_probs_jax)
@@ -552,23 +525,17 @@ def ppo_loss(params, apply_fn, board_batch, aux_batch, actions, states, players,
     value_loss = jnp.mean((values_pred - returns_jax) ** 2)
     
     entropy = compute_masked_entropy(policy_logits, states, players, dices)
-    # L = L_policy + c1*L_value - c2*entropy
     total_loss = policy_loss + C1 * value_loss - C2 * entropy
-    
-    # Return JAX arrays for metrics - convert to float outside grad
     return total_loss, (policy_loss, value_loss, entropy, total_loss)
 
 def train_step(state, board_batch, aux_batch, actions, states, players, dices,
                old_log_probs, advantages, returns):
-    """Single training step."""
     def loss_fn(params):
         return ppo_loss(params, state.apply_fn, board_batch, aux_batch, actions,
                         states, players, dices, old_log_probs, advantages, returns)
     
     (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
     state = state.apply_gradients(grads=grads)
-    
-    # Convert metrics to dict after grad computation
     policy_loss, value_loss, entropy, total_loss = aux
     metrics = {
         'policy_loss': float(policy_loss),
@@ -581,9 +548,7 @@ def train_step(state, board_batch, aux_batch, actions, states, players, dices,
 
 def train_ppo(num_iterations=10000, batch_size=BATCH_SIZE, buffer_size=BUFFER_SIZE,
               checkpoint_dir='/home/zhangdjr/Desktop/RL-Gammon/checkpoints/agent3', verbose_every=10):
-    """Train Agent 3 using PPO."""
-    print(f"Training Agent 3 (PPO) | batch={batch_size}, buffer={buffer_size}")
-    print("-" * 60)
+    print(f"Training Agent 3: batch={batch_size}, buffer={buffer_size}")
     
     model = BackgammonPPONet()
     rng = random.PRNGKey(0)
@@ -658,8 +623,6 @@ def train_ppo(num_iterations=10000, batch_size=BATCH_SIZE, buffer_size=BUFFER_SI
                     mb_old_log_probs = batch_data['log_probs'][mb_indices]
                     mb_advantages = advantages[mb_indices]
                     mb_returns = returns[mb_indices]
-                    
-                    # Encode batch BEFORE calling train_step (Numba can't run inside JAX grad)
                     mb_board, mb_aux = batch_encode_states(mb_states, mb_players)
                     mb_board = jnp.array(mb_board)
                     mb_aux = jnp.array(mb_aux)
@@ -688,10 +651,8 @@ def train_ppo(num_iterations=10000, batch_size=BATCH_SIZE, buffer_size=BUFFER_SI
             checkpointer = ocp.StandardCheckpointer()
             checkpointer.save(checkpoint_path / f'checkpoint_{iteration + 1}', train_state_obj.params, force=True)
             checkpointer.close()
-            print(f"Checkpoint saved at iteration {iteration + 1}")
     
-    print("-" * 60)
-    print("Training complete!")
+    print("Training complete")
     
     checkpoint_path = pathlib.Path(checkpoint_dir)
     checkpoint_path.mkdir(parents=True, exist_ok=True)
@@ -703,7 +664,6 @@ def train_ppo(num_iterations=10000, batch_size=BATCH_SIZE, buffer_size=BUFFER_SI
     return train_state_obj.params
 
 def load_agent(checkpoint_path):
-    """Load a trained PPO agent from checkpoint."""
     model = BackgammonPPONet()
     checkpointer = ocp.StandardCheckpointer()
     params = checkpointer.restore(pathlib.Path(checkpoint_path))
@@ -712,7 +672,6 @@ def load_agent(checkpoint_path):
     return params, model
 
 def evaluate_agent(params, model, num_games=100, opponent_params=None, opponent_model=None):
-    """Evaluate agent via self-play. Returns (win_rate, avg_score)."""
     if opponent_params is None:
         opponent_params = params
         opponent_model = model
@@ -756,7 +715,6 @@ def evaluate_agent(params, model, num_games=100, opponent_params=None, opponent_
     return win_rate, avg_score
 
 def play_single_game(params, model, verbose=True):
-    """Play a single game. Returns (winner, score, num_moves)."""
     player, dice, state = _new_game()
     num_moves = 0
     
@@ -797,7 +755,6 @@ if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "train"
     
     if mode == "train":
-        print("Starting PPO training...")
         params = train_ppo(
             num_iterations=30000,
             batch_size=128,
@@ -805,7 +762,6 @@ if __name__ == "__main__":
             checkpoint_dir='/home/zhangdjr/Desktop/RL-Gammon/checkpoints/agent3',
             verbose_every=1000
         )
-        print("\nTraining complete!")
     
     elif mode == "eval":
         checkpoint_path = sys.argv[2] if len(sys.argv) > 2 else '/tmp/agent3_checkpoints/final_params'
