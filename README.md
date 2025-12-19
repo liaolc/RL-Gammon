@@ -46,7 +46,7 @@ Agent Code and Hyperparameters found in `agent2_tdl.py`.
 `conda env create -f environment.yml` 
 - Edit the SLURM script `run_gammon.sl` to reflect your file organization, environment path, etc.
 - Hyperparameters like Batch Size, Num. Iterations, Checkpoint Frequency, found at bottom in `if __name__ == "__main__":`. 
-- **To Load From Checkpoint:** Uncomment or add `resume_from=<absolute checkpoint path>` 
+- **To Load From Checkpoint:** Uncomment or add `resume_from=<absolute checkpoint path>` to `train_agent2()` call
     - To Load our weights, unzip the desired`PyTree` checkpoint zip file found in `/checkpoints/agent_2/`, then add that path to the `resume_from` parameter. 
     - Our furthest checkpoint: Batch size = 32, 1k+ iterations. 
 - Run using `python agent2_tdl.py`. 
