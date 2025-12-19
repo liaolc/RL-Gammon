@@ -799,11 +799,11 @@ if __name__ == "__main__":
     if mode == "train":
         print("Starting PPO training...")
         params = train_ppo(
-            num_iterations=300,
+            num_iterations=30000,
             batch_size=128,
             buffer_size=2048,
             checkpoint_dir='/home/zhangdjr/Desktop/RL-Gammon/checkpoints/agent3',
-            verbose_every=10
+            verbose_every=1000
         )
         print("\nTraining complete!")
     

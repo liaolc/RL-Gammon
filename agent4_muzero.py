@@ -620,10 +620,10 @@ if __name__ == "__main__":
     if mode == "train":
         print("Starting Stochastic MuZero training...")
         params = train_stochastic_muzero(
-            num_iterations=50,
+            num_iterations=5000,
             games_per_iter=3,
             checkpoint_dir='/home/zhangdjr/Desktop/RL-Gammon/checkpoints/agent4',
-            verbose_every=10
+            verbose_every=1000
         )
     
     elif mode == "eval":
