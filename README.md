@@ -27,6 +27,12 @@ sbatch train_agent3.sl
 sbatch train_agent4.sl
 ```
 
+### Agent 2 (GPU)
+```bash
+sbatch run_gammon.sl
+```
+See `agent2_tdl.py` for hyperparameters. To resume from checkpoint, add `resume_from=<path>`.
+
 ## Loading Weights
 
 ### Agent 1
@@ -34,6 +40,12 @@ sbatch train_agent4.sl
 from load_agent1 import load_agent1, get_value
 weights = load_agent1()
 value = get_value(state, player, weights)
+```
+
+### Agent 2
+Unzip checkpoint from `checkpoints/agent_2/`, then in `agent2_tdl.py`:
+```python
+resume_from = "<path_to_unzipped_checkpoint>"
 ```
 
 ### Agent 3
