@@ -1,12 +1,3 @@
-"""Agent 4: Stochastic MuZero for Backgammon.
-
-Corrected implementation addressing:
-1. Explicit 21 dice outcomes (not learned codebook)
-2. Legal moves only in MCTS expansion
-3. Exact move identity (not lossy encoding)
-4. Proper two-player alternation
-"""
-
 import gc
 import jax
 import jax.numpy as jnp
@@ -492,7 +483,7 @@ def train_step(params, model, optimizer, opt_state, batch):
 
 
 def train_stochastic_muzero(num_iterations=1000, games_per_iter=5,
-                            checkpoint_dir='/home/zhangdjr/projects/RL-Gammon/checkpoints/agent4',
+                            checkpoint_dir='/home/zhangdjr/Desktop/RL-Gammon/checkpoints/agent4',
                             verbose_every=10):
     """Main training loop."""
     print(f"Training Agent 4 (Stochastic MuZero)")
@@ -631,7 +622,7 @@ if __name__ == "__main__":
         params = train_stochastic_muzero(
             num_iterations=50,
             games_per_iter=3,
-            checkpoint_dir='/home/zhangdjr/projects/RL-Gammon/checkpoints/agent4',
+            checkpoint_dir='/home/zhangdjr/Desktop/RL-Gammon/checkpoints/agent4',
             verbose_every=10
         )
     

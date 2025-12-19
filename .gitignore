@@ -6,7 +6,6 @@ __pycache__/
 *.pyd
 .Python
 *.npy
-checkpoints/
 .vscode/
 .idea/
 *.swp

@@ -580,7 +580,7 @@ def train_step(state, board_batch, aux_batch, actions, states, players, dices,
     return state, metrics
 
 def train_ppo(num_iterations=10000, batch_size=BATCH_SIZE, buffer_size=BUFFER_SIZE,
-              checkpoint_dir='/home/zhangdjr/projects/RL-Gammon/checkpoints/agent3', verbose_every=10):
+              checkpoint_dir='/home/zhangdjr/Desktop/RL-Gammon/checkpoints/agent3', verbose_every=10):
     """Train Agent 3 using PPO."""
     print(f"Training Agent 3 (PPO) | batch={batch_size}, buffer={buffer_size}")
     print("-" * 60)
@@ -802,7 +802,7 @@ if __name__ == "__main__":
             num_iterations=300,
             batch_size=128,
             buffer_size=2048,
-            checkpoint_dir='/home/zhangdjr/projects/RL-Gammon/checkpoints/agent3',
+            checkpoint_dir='/home/zhangdjr/Desktop/RL-Gammon/checkpoints/agent3',
             verbose_every=10
         )
         print("\nTraining complete!")

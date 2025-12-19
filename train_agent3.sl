@@ -14,7 +14,7 @@
 #SBATCH --nodelist=g011
 
 # Change to the project directory
-cd /home/zhangdjr/projects/RL-Gammon
+cd /home/zhangdjr/Desktop/RL-Gammon
 
 # Load conda module if needed (adjust based on your cluster setup)
 # module load anaconda3  # Uncomment if needed

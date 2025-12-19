@@ -1,11 +1,3 @@
-"""Stochastic MuZero Network for Backgammon (Agent 4).
-
-Corrected implementation:
-- No learned chance codebook (dice are known in backgammon)
-- 21 explicit dice outcomes
-- Proper afterstate formulation
-"""
-
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
@@ -18,7 +10,7 @@ NUM_DICE_OUTCOMES = 21  # Explicit dice outcomes, not learned
 
 
 class ResBlockV2(nn.Module):
-    """Pre-activation ResNet v2 block with LayerNorm."""
+    """Pre-activation ResNet v2 block."""
     features: int
     
     @nn.compact
@@ -34,7 +26,7 @@ class ResBlockV2(nn.Module):
 
 
 class RepresentationNetwork(nn.Module):
-    """h: observation -> latent state s^0"""
+    """h: observation -> latent state."""
     hidden_size: int = HIDDEN_SIZE
     num_blocks: int = NUM_RES_BLOCKS
     
@@ -47,10 +39,7 @@ class RepresentationNetwork(nn.Module):
 
 
 class AfterstateDynamicsNetwork(nn.Module):
-    """φ: (state, action_embedding) -> afterstate
-    
-    In backgammon: state after player moves, before opponent rolls dice.
-    """
+    """φ: (state, action) -> afterstate."""
     hidden_size: int = HIDDEN_SIZE
     num_blocks: int = NUM_RES_BLOCKS // 2
     
@@ -64,11 +53,7 @@ class AfterstateDynamicsNetwork(nn.Module):
 
 
 class DynamicsNetwork(nn.Module):
-    """g: (afterstate, dice_embedding) -> (next_state, reward)
-    
-    In backgammon: dice is KNOWN (21 outcomes), not learned.
-    This is deterministic given afterstate + dice.
-    """
+    """g: (afterstate, dice) -> (next_state, reward)."""
     hidden_size: int = HIDDEN_SIZE
     num_blocks: int = NUM_RES_BLOCKS // 2
     
@@ -87,10 +72,7 @@ class DynamicsNetwork(nn.Module):
 
 
 class PredictionNetwork(nn.Module):
-    """f: state -> (policy_logits, value)
-    
-    Policy is over move indices (not micro-actions).
-    """
+    """f: state -> (policy, value)."""
     hidden_size: int = HIDDEN_SIZE
     max_moves: int = 500  # Max legal moves to consider
     
@@ -111,11 +93,7 @@ class PredictionNetwork(nn.Module):
 
 
 class AfterstatePredictionNetwork(nn.Module):
-    """ψ: afterstate -> Q_value
-    
-    For backgammon: No σ network needed since dice probabilities are known.
-    Just predict Q(s, a) = V(afterstate).
-    """
+    """ψ: afterstate -> Q-value."""
     hidden_size: int = HIDDEN_SIZE
     
     @nn.compact
@@ -128,7 +106,7 @@ class AfterstatePredictionNetwork(nn.Module):
 
 
 class MoveEncoder(nn.Module):
-    """Encode a move (sequence of submoves) into an embedding."""
+    """Encode move into embedding."""
     hidden_size: int = HIDDEN_SIZE
     max_submoves: int = 4
     
@@ -141,7 +119,7 @@ class MoveEncoder(nn.Module):
 
 
 class DiceEncoder(nn.Module):
-    """Encode dice roll into an embedding."""
+    """Encode dice into embedding."""
     hidden_size: int = HIDDEN_SIZE
     
     @nn.compact
@@ -153,7 +131,7 @@ class DiceEncoder(nn.Module):
 
 
 class StochasticMuZeroNetwork(nn.Module):
-    """Stochastic MuZero for Backgammon with explicit dice modeling."""
+    """Stochastic MuZero Network for Backgammon."""
     hidden_size: int = HIDDEN_SIZE
     max_moves: int = 500
     
@@ -204,7 +182,7 @@ class StochasticMuZeroNetwork(nn.Module):
 
 # Dice utilities
 def dice_to_index(d1, d2):
-    """Convert dice roll to index (0-20)."""
+    """Dice roll -> index (0-20)."""
     high, low = max(d1, d2), min(d1, d2)
     # Index formula for upper triangular enumeration
     idx = 0
@@ -215,7 +193,7 @@ def dice_to_index(d1, d2):
 
 
 def index_to_dice(idx):
-    """Convert index to dice roll."""
+    """Index -> dice roll."""
     count = 0
     for high in range(1, 7):
         for low in range(1, high + 1):
@@ -226,7 +204,7 @@ def index_to_dice(idx):
 
 
 def dice_probability(idx):
-    """Get probability of dice outcome by index."""
+    """Probability of dice outcome."""
     high, low = index_to_dice(idx)
     if high == low:
         return 1.0 / 36.0  # Doubles
