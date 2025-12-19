@@ -30,7 +30,7 @@ sbatch train_agent4.sl
 ```bash
 sbatch run_gammon.sl
 ```
-Note: You may run into issues if the machine's cuda has compatibility issues with JAX
+Note: You may run into issues if the machine's cuda has compatibility issues with JAX. Also, you will have to change the paths inside the code to match up with your own machine, as we used the paths on our laptops/clusters.
 
 ## Loading Weights
 
