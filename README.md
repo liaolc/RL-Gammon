@@ -65,4 +65,4 @@ state, policy, value = get_initial_inference(params, model, observation)
 
 ## Reflection
 
-Tian-hao Zhang made agents 1, 3, 4 while Roy Liao made agent 2. The trained weights may not be the most advanced, because we received late notice that the cluster we used had an incompatible CUDA with JAX. Furthermore, memory issues during the middle of train jobs made it so that we only had 24 hours to train our agents. Some of the code used LLM assistance, mainly for generating some of the helper functions used in the agents.
+Tian-hao Zhang made agents 1, 3, 4 while Roy Liao made agent 2. The trained weights may not be the most advanced, because we received late notice that the cluster we initially used(NSF Delta) had an incompatible CUDA with JAX. Furthermore, memory issues during the middle of train jobs made it so that we only had 24 hours to train our agents. Some of the code used LLM assistance, mainly for generating some of the helper functions used in the agents.
