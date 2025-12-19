@@ -42,6 +42,7 @@ value = get_value(state, player, weights)
 ```
 
 ### Agent 2
+Unzip `checkpoints/agent_2/agent2_b32_long.zip` (longer training) first, then:
 ```python
 from load_agent2 import load_agent2, get_value
 params, model = load_agent2("<path_to_checkpoint>")
