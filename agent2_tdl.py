@@ -267,13 +267,14 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
     
     # Initialize per-game eligibility traces
     traces = jax.tree.map(lambda p: jnp.zeros((batch_size,) + p.shape, dtype=p.dtype), params)
-    
+
     states, players, dices = _vectorized_new_game(batch_size)
     total_games = white_wins = black_wins = 0
-    
-    checkpoint_path = pathlib.Path(CHECKPOINT_DIR)
-    checkpoint_path.mkdir(parents=True, exist_ok=True)
+
+    # Create checkpoint directory for this run
+    run_checkpoint_dir.mkdir(parents=True, exist_ok=True)
     checkpointer = ocp.StandardCheckpointer()
+    print(f"Checkpoints will be saved to: {run_checkpoint_dir}")
     
     for iteration in range(num_iterations):
         # Store current states and encode
@@ -360,10 +361,10 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
                 print(f"[{iteration + 1}/{num_iterations}] Loss: {loss:.6f}")
         
         if (iteration + 1) % checkpoint_every == 0 or iteration == 1:
-            checkpointer.save(checkpoint_path / f"checkpoint_{iteration + 1}", params, force=True)
+            checkpointer.save(run_checkpoint_dir / f"checkpoint_{iteration + 1}", params, force=True)
             print(f"Checkpoint saved: {iteration + 1}")
-    
-    checkpointer.save(checkpoint_path / "final", params, force=True)
+
+    checkpointer.save(run_checkpoint_dir / "final", params, force=True)
     print("Training complete")
     checkpointer.close()
     
@@ -371,11 +372,11 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
 
 if __name__ == "__main__":
     params = train_agent2(
-        batch_size=16,
-        num_iterations=300,
+        batch_size=32,
+        num_iterations=100000,
         learning_rate=1e-4,
         lambda_param=0.7,
-        verbose_every=1,
-        checkpoint_every=30,
-        #resume_from="/scratch/liaolc/RL-Gammon/checkpoints/agent2/checkpoint_30"
+        verbose_every=10,
+        checkpoint_every=50,
+        #resume_from="/scratch/liaolc/RL-Gammon/checkpoints/agent2/checkpoint_60"
     )

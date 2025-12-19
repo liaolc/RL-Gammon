@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=rl_gammon_agent2_b16i300_new                      # Job name
-#SBATCH --output=rl_gammon_agent2_b16i300_new%j.out                   # Standard output
-#SBATCH --error=rl_gammon_agent2_b16i300_new%j.err                    # Standard error
+#SBATCH --job-name=rl_gammon_agent2_b16i300_long                     # Job name
+#SBATCH --output=rl_gammon_agent2_b16i300_long%j.out                   # Standard output
+#SBATCH --error=rl_gammon_agent2_b16i300_long%j.err                    # Standard error
 #SBATCH --nodes=1                                   # Number of nodes
 #SBATCH --ntasks=1                                  # Number of tasks
 #SBATCH --cpus-per-task=4                           # Number of CPU cores per task
 #SBATCH --gres=gpu:1                                # Request 1 GPU
-#SBATCH --mem=16G                                   # Total memory
+#SBATCH --mem=49G                                   # Total memory
 #SBATCH --partition=short                           # Partition
 #SBATCH --time=12:00:00                              # Wall time (hh:mm:ss)
 #SBATCH --mail-type=BEGIN,END,FAIL                  # Email on start, end, fail
