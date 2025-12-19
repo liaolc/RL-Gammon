@@ -1,43 +1,51 @@
 # RL-Gammon
 
-Backgammon RL agents for CS final project. Environment code by Prof. Carl McTague.
+Backgammon RL agents for CS final project.
 
-## Structure
-
-```
-RL-Gammon/
-├── agent1_td0.py              # Agent 1 implementation
-├── backgammon_engine.py       # Game engine (professor)
-├── backgammon_value_net.py    # For Agent 2 (professor)
-├── backgammon_ppo_net.py      # For Agent 3 (professor)
-├── jax_tutorial.py            # JAX examples
-└── requirements.txt
-```
-
-## Quick Start
+## Setup
 
 ```bash
-python -m venv venv
-source venv/bin/activate
+conda create -n rl-gammon python=3.12
+conda activate rl-gammon
 pip install -r requirements.txt
-python agent1_td0.py
-# Weights saved to agent1_weights.npy
 ```
 
-## Agent 1: TD(0) Linear
+## Training
 
-**Implementation:**
-- 52 handcrafted features (blots, primes, pip count, etc.)
-- TD(0) learning with self-play
-- Epsilon-greedy exploration (0.3 → 0.01)
-- 2-ply search with batch evaluation
-- Canonical state representation
-- Linear value function: V(s) = w·f(s)
+### Agent 1
+```bash
+python agent1_td0.py
+```
 
-**File:** `agent1_td0.py` - Complete implementation (features, training, evaluation)
+### Agent 3 (GPU)
+```bash
+sbatch train_agent3.sl
+```
 
-**Training:** 50k iterations, batch size 256, saves to `agent1_weights.npy`
+### Agent 4 (GPU)
+```bash
+sbatch train_agent4.sl
+```
 
-## Agents 2 & 3
+## Loading Weights
 
-Not yet implemented.
+### Agent 1
+```python
+from load_agent1 import load_agent1, get_value
+weights = load_agent1()
+value = get_value(state, player, weights)
+```
+
+### Agent 3
+```python
+from load_agent3 import load_agent3, get_value_and_policy
+params, model = load_agent3()
+value, policy_logits = get_value_and_policy(params, model, board_features, aux_features)
+```
+
+### Agent 4
+```python
+from load_agent4 import load_agent4, get_initial_inference
+params, model = load_agent4()
+state, policy, value = get_initial_inference(params, model, observation)
+```
