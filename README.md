@@ -5,9 +5,8 @@ Backgammon RL agents for CS final project.
 ## Setup
 
 ```bash
-conda create -n rl-gammon python=3.12
+conda env create -f environment.yml
 conda activate rl-gammon
-pip install -r requirements.txt
 ```
 
 ## Training
