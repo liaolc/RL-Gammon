@@ -42,9 +42,10 @@ value = get_value(state, player, weights)
 ```
 
 ### Agent 2
-Unzip checkpoint from `checkpoints/agent_2/`, then in `agent2_tdl.py`:
 ```python
-resume_from = "<path_to_unzipped_checkpoint>"
+from load_agent2 import load_agent2, get_value
+params, model = load_agent2("<path_to_checkpoint>")
+value = get_value(params, model, board_features, aux_features)
 ```
 
 ### Agent 3
