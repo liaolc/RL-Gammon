@@ -19,7 +19,7 @@ LAMBDA = 0.7
 GAMMA = 1.0
 BATCH_SIZE = 64
 NUM_ITERATIONS = 50000
-CHECKPOINT_DIR = './checkpoints/agent2'
+CHECKPOINT_DIR = '/scratch/liaolc/RL-Gammon/checkpoints/agent2'
 
 def encode_state(state, player):
     """Encode state into 15 feature planes (24, 15) + 6 aux features."""
@@ -127,41 +127,93 @@ def loss_fn(params, model, planes, aux, targets):
     
     return loss
 
+def load_checkpoint(checkpoint_name):
+    """Load a checkpoint and return the model and params.
+
+    Args:
+        checkpoint_name: Name of checkpoint (e.g., 'checkpoint_30') or full path
+
+    Returns:
+        tuple: (model, params)
+    """
+    model = BackgammonValueNet()
+    rng_key = jax.random.key(0)
+    dummy_planes = jnp.zeros((1, BOARD_LENGTH, CONV_INPUT_CHANNELS))
+    dummy_aux = jnp.zeros((1, AUX_INPUT_SIZE))
+    params = model.init(rng_key, dummy_planes, dummy_aux)['params']
+
+    checkpoint_path = pathlib.Path(CHECKPOINT_DIR)
+    checkpointer = ocp.StandardCheckpointer()
+
+    # Handle both relative and absolute paths
+    if not pathlib.Path(checkpoint_name).is_absolute():
+        restore_path = checkpoint_path / checkpoint_name
+    else:
+        restore_path = pathlib.Path(checkpoint_name)
+
+    params = checkpointer.restore(restore_path)
+    return model, params
+
 def td_lambda_update(params, opt_state, optimizer, traces, grads, td_errors, lambda_param, gamma):
     """Classical TD(λ) update with per-game traces."""
     batch_size = td_errors.shape[0]
-    
+
     # Update traces: z_t = γλ z_{t-1} + g_t
     new_traces = tree_map(
         lambda z, g: gamma * lambda_param * z + g,
         traces,
         grads
     )
-    
+
     # Weight update: w_{t+1} = w_t + α Σ_i δ_t^(i) z_t^(i)
     def scale_and_sum(z):
         td_errors_reshaped = td_errors.reshape((batch_size,) + (1,) * (z.ndim - 1))
         return jnp.sum(td_errors_reshaped * z, axis=0)
-    
+
     summed_updates = tree_map(scale_and_sum, new_traces)
     updates, new_opt_state = optimizer.update(summed_updates, opt_state, params)
     new_params = optax.apply_updates(params, updates)
-    
+
     return new_params, new_opt_state, new_traces
 
-def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS, 
+def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
                  learning_rate=LEARNING_RATE, lambda_param=LAMBDA,
-                 verbose_every=100, checkpoint_every=5000):
-    """Train Agent 2 using TD(λ) with neural network."""
+                 verbose_every=100, checkpoint_every=5000, resume_from=None):
+    """Train Agent 2 using TD(λ) with neural network.
+
+    Args:
+        batch_size: Number of parallel games
+        num_iterations: Number of training iterations
+        learning_rate: Adam learning rate
+        lambda_param: TD(λ) parameter
+        verbose_every: Print progress every N iterations
+        checkpoint_every: Save checkpoint every N iterations
+        resume_from: Path to checkpoint to resume from (e.g., 'checkpoint_30' or full path)
+    """
     print(f"Training Agent 2: batch={batch_size}, iters={num_iterations}, lr={learning_rate}, λ={lambda_param}")
-    
+
     # Initialize model and optimizer
     model = BackgammonValueNet()
     rng_key = jax.random.key(0)
     dummy_planes = jnp.zeros((1, BOARD_LENGTH, CONV_INPUT_CHANNELS))
     dummy_aux = jnp.zeros((1, AUX_INPUT_SIZE))
     params = model.init(rng_key, dummy_planes, dummy_aux)['params']
-    
+
+    # Load checkpoint if resuming
+    if resume_from is not None:
+        checkpoint_path = pathlib.Path(CHECKPOINT_DIR)
+        checkpointer = ocp.StandardCheckpointer()
+
+        # Handle both relative and absolute paths
+        if not pathlib.Path(resume_from).is_absolute():
+            resume_path = checkpoint_path / resume_from
+        else:
+            resume_path = pathlib.Path(resume_from)
+
+        print(f"Loading checkpoint from {resume_path}")
+        params = checkpointer.restore(resume_path)
+        print("Checkpoint loaded successfully")
+
     optimizer = optax.adam(learning_rate=learning_rate)
     opt_state = optimizer.init(params)
     
@@ -253,7 +305,7 @@ def train_agent2(batch_size=BATCH_SIZE, num_iterations=NUM_ITERATIONS,
             else:
                 print(f"[{iteration + 1}/{num_iterations}] Loss: {loss:.6f}")
         
-        if (iteration + 1) % checkpoint_every == 0:
+        if (iteration + 1) % checkpoint_every == 0 or iteration == 1:
             checkpointer.save(checkpoint_path / f"checkpoint_{iteration + 1}", params, force=True)
             print(f"Checkpoint saved: {iteration + 1}")
     
@@ -270,5 +322,6 @@ if __name__ == "__main__":
         learning_rate=1e-4,
         lambda_param=0.7,
         verbose_every=1,
-        checkpoint_every=30
+        checkpoint_every=30,
+        resume_from="/scratch/liaolc/RL-Gammon/checkpoints/agent2/checkpoint_30"
     )
